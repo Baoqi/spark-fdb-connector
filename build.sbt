@@ -6,7 +6,8 @@ lazy val buildSettings = Seq(
   version in ThisBuild := Versions.currentVersion,
   scalaVersion         := Versions.scalaVersion,
   crossScalaVersions   := Versions.crossScala,
-  crossVersion         := CrossVersion.binary
+  crossVersion         := CrossVersion.binary,
+  scalacOptions ++= Seq("-feature", "-deprecation", "-Xexperimental")
 )
 
 
