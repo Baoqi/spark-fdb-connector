@@ -1,3 +1,3 @@
 package com.guandata.spark.fdb
 
-case class TableDefinition(names: List[String], types: List[ColumnDataType], primaryKeys: List[String])
+case class TableDefinition(tableName: String, columnNames: List[String], columnTypes: List[ColumnDataType], primaryKeys: List[String])
