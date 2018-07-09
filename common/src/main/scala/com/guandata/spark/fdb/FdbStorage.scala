@@ -1,6 +1,9 @@
 package com.guandata.spark.fdb
 
-import com.apple.foundationdb.{StreamingMode, Transaction}
+import java.util
+import java.util.concurrent.CompletableFuture
+
+import com.apple.foundationdb.{KeyValue, ReadTransaction, StreamingMode, Transaction}
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
@@ -67,7 +70,7 @@ class FdbStorage(domainId: String) {
     FdbInstance.wrapDbFunction{ tr =>
       val rangeResult = tr.getRange(metaDir.range(Tuple.from(tableName))).asList().join().asScala
       if (rangeResult.isEmpty) {
-        Failure(new FdbException(s"Table $tableName already exists in domain: $domainId"))
+        Failure(new FdbException(s"Table $tableName not found in domain: $domainId"))
       } else {
         var names = List.empty[String]
         var types = List.empty[String]
@@ -101,7 +104,7 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  private def truncateTableInner(tr: Transaction, tableName: String) = {
+  private def truncateTableInner(tr: Transaction, tableName: String): Unit = {
     val dataDir = DirectoryLayer.getDefault.createOrOpen(tr, List(domainId, tableName).asJava, Array[Byte]()).join()
     tr.clear(dataDir.range(Tuple.from()))
   }
@@ -193,7 +196,7 @@ class FdbStorage(domainId: String) {
   }
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
-    val tableDefinition = getTableDefinition(tableName).get
+    // val tableDefinition = getTableDefinition(tableName).get
     val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
 
     val range = dataDir.range()
@@ -202,6 +205,14 @@ class FdbStorage(domainId: String) {
       tr.getRange(range.begin, range.end, limit, false, StreamingMode.EXACT).asList().join().asScala.map { kv =>
         Tuple.fromBytes(kv.getValue).getItems.asScala
       }
+    }
+  }
+
+  def openTableAsList(tableName: String): CompletableFuture[util.List[KeyValue]] = {
+    val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
+    val range = dataDir.range()
+    FdbInstance.wrapDbFunction { tr =>
+      tr.getRange(range.begin, range.end, ReadTransaction.ROW_LIMIT_UNLIMITED, false, StreamingMode.WANT_ALL).asList()
     }
   }
 }
