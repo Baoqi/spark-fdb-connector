@@ -194,15 +194,11 @@ class FdbStorage(domainId: String) {
   }
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
-    // val tableDefinition = getTableDefinition(tableName).get
     val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
-
     val range = dataDir.range()
 
-    FdbInstance.wrapDbFunction { tr =>
-      tr.getRange(range.begin, range.end, limit, false, StreamingMode.EXACT).asList().join().asScala.map { kv =>
-        Tuple.fromBytes(kv.getValue).getItems.asScala
-      }
+    rangeQueryAsVector(tableName, range.begin, range.end, limit).map{ kv =>
+      Tuple.fromBytes(kv.getValue).getItems.asScala
     }
   }
 
@@ -216,7 +212,13 @@ class FdbStorage(domainId: String) {
     val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
     FdbInstance.wrapDbFunction { tr =>
       val dirRange = dataDir.range(Tuple.from())
-      val keyLocalityRanges = AsyncUtil.collectRemaining(LocalityUtil.getBoundaryKeys(tr, dirRange.begin, dirRange.end)).join().asScala.toList
+      val closableIterator = LocalityUtil.getBoundaryKeys(tr, dirRange.begin, dirRange.end)
+      var keyLocalityRanges: List[Array[Byte]] = List.empty[Array[Byte]]
+      try {
+        keyLocalityRanges = AsyncUtil.collectRemaining(closableIterator).join().asScala.toList
+      } finally {
+        closableIterator.close()
+      }
 
       val splitRanges = if (keyLocalityRanges.nonEmpty) {
         keyLocalityRanges.zip(keyLocalityRanges.drop(1) ++ List(dirRange.end)).map{ case (start, end) =>
