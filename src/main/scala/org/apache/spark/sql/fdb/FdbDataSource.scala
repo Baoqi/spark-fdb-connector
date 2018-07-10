@@ -43,7 +43,7 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
 }
 
 
-class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[String], keyRange: Range) extends DataReaderFactory[Row] {
+class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[String], begin: Array[Byte], end: Array[Byte]) extends DataReaderFactory[Row] {
   override def preferredLocations: Array[String] = {
     locations.toArray
   }
@@ -51,7 +51,7 @@ class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[S
   override def createDataReader(): DataReader[Row] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
-    new FdbDataReader(tableDefinition, storage, keyRange)
+    new FdbDataReader(tableDefinition, storage, new Range(begin, end))
   }
 }
 
@@ -77,7 +77,11 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
   override def createDataReaderFactories(): util.List[DataReaderFactory[Row]] = {
     val localityInfos = storage.getLocalityInfo(tableName)
     localityInfos.map{ case (locations, range) =>
-      new FdbDataReaderFactory(domainId = domainId, tableName = tableName, locations = locations, keyRange = range).asInstanceOf[DataReaderFactory[Row]]
+      new FdbDataReaderFactory(domainId = domainId,
+        tableName = tableName,
+        locations = locations,
+        begin = range.begin,
+        end = range.end).asInstanceOf[DataReaderFactory[Row]]
     }.asJava
   }
 }
