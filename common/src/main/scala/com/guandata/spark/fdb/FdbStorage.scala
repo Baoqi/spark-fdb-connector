@@ -3,7 +3,8 @@ package com.guandata.spark.fdb
 import java.util
 import java.util.concurrent.CompletableFuture
 
-import com.apple.foundationdb.{KeyValue, ReadTransaction, StreamingMode, Transaction}
+import com.apple.foundationdb.async.AsyncUtil
+import com.apple.foundationdb.{KeyValue, LocalityUtil, Range, ReadTransaction, StreamingMode, Transaction}
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
@@ -213,6 +214,25 @@ class FdbStorage(domainId: String) {
     val range = dataDir.range()
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(range.begin, range.end, ReadTransaction.ROW_LIMIT_UNLIMITED, false, StreamingMode.WANT_ALL).asList()
+    }
+  }
+
+  def getLocalityInfo(tableName: String): Seq[(List[String], Range)]  = {
+    val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
+    FdbInstance.wrapDbFunction { tr =>
+      val dirRange = dataDir.range(Tuple.from())
+      val keyLocalityRanges = AsyncUtil.collectRemaining(LocalityUtil.getBoundaryKeys(tr, dirRange.begin, dirRange.end)).join().asScala.toList
+
+      val splitRanges = if (keyLocalityRanges.nonEmpty) {
+        keyLocalityRanges.zip(keyLocalityRanges.drop(1) ++ List(dirRange.end)).map{ case (start, end) =>
+            new Range(start, end)
+        }
+      } else List(dirRange)
+
+      splitRanges.map{ range =>
+        val locations: List[String] = LocalityUtil.getAddressesForKey(tr, range.begin).join().toList
+        locations -> range
+      }
     }
   }
 }

@@ -1,5 +1,6 @@
 package com.guandata.spark.fdb
 
+import com.apple.foundationdb.tuple.ByteArrayUtil
 import org.scalatest._
 
 class FdbBasicTestSpec extends FlatSpec with Matchers {
@@ -52,6 +53,12 @@ class FdbBasicTestSpec extends FlatSpec with Matchers {
       ),
       false
     )
+
+    val localityInfo = storage.getLocalityInfo(tableName)
+
+    localityInfo.zipWithIndex.foreach{ case ((locations, range), i) =>
+      System.out.println(s"$i location: ${locations.toString},  key range:  ${ByteArrayUtil.printable(range.begin)} - ${ByteArrayUtil.printable(range.end)}")
+    }
 
     val previewContent = storage.preview(tableName, 30)
     System.out.println(previewContent.toString)

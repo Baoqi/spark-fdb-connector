@@ -2,7 +2,7 @@ package org.apache.spark.sql.fdb
 
 import java.util
 
-import com.apple.foundationdb.KeyValue
+import com.apple.foundationdb.{KeyValue, Range}
 import com.apple.foundationdb.tuple.Tuple
 import com.guandata.spark.fdb.{ColumnDataType, FdbStorage, TableDefinition}
 import org.apache.spark.sql.{Row, RowFactory}
@@ -26,7 +26,11 @@ class FdbDataReader(tableDefinition: TableDefinition, items: util.List[KeyValue]
 }
 
 
-class FdbDataReaderFactory(domainId: String, tableName: String) extends DataReaderFactory[Row] {
+class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[String], keyRange: Range) extends DataReaderFactory[Row] {
+  override def preferredLocations: Array[String] = {
+    locations.toArray
+  }
+
   override def createDataReader(): DataReader[Row] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
@@ -54,7 +58,10 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
   }
 
   override def createDataReaderFactories(): util.List[DataReaderFactory[Row]] = {
-    List(new FdbDataReaderFactory(domainId = domainId, tableName = tableName).asInstanceOf[DataReaderFactory[Row]]).asJava
+    val localityInfos = storage.getLocalityInfo(tableName)
+    localityInfos.map{ case (locations, range) =>
+      new FdbDataReaderFactory(domainId = domainId, tableName = tableName, locations = locations, keyRange = range).asInstanceOf[DataReaderFactory[Row]]
+    }.asJava
   }
 }
 
