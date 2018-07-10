@@ -1,10 +1,7 @@
 package com.guandata.spark.fdb
 
-import java.util
-import java.util.concurrent.CompletableFuture
-
 import com.apple.foundationdb.async.AsyncUtil
-import com.apple.foundationdb.{KeyValue, LocalityUtil, Range, ReadTransaction, StreamingMode, Transaction}
+import com.apple.foundationdb.{KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
@@ -209,11 +206,9 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  def openTableAsList(tableName: String): CompletableFuture[util.List[KeyValue]] = {
-    val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
-    val range = dataDir.range()
+  def rangeQueryAsVector(tableName: String, rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
-      tr.getRange(range.begin, range.end, ReadTransaction.ROW_LIMIT_UNLIMITED, false, StreamingMode.WANT_ALL).asList()
+      tr.getRange(rangeBegin, rangeEnd, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
     }
   }
 

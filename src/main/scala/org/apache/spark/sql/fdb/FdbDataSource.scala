@@ -2,7 +2,7 @@ package org.apache.spark.sql.fdb
 
 import java.util
 
-import com.apple.foundationdb.{KeyValue, Range}
+import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
 import com.guandata.spark.fdb.{ColumnDataType, FdbStorage, TableDefinition}
 import org.apache.spark.sql.{Row, RowFactory}
@@ -13,12 +13,29 @@ import org.apache.spark.sql.types.StructType
 import scala.collection.JavaConverters._
 
 
-class FdbDataReader(tableDefinition: TableDefinition, items: util.List[KeyValue]) extends DataReader[Row] {
-  private val iter = items.iterator()
-  override def next(): Boolean = iter.hasNext
+class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range) extends DataReader[Row] {
+  private val BATCH_ROW_COUNT = 90    //  key max size: 10,000, value max size 100,000,  transaction max size: 10,000,000 bytes, so, 10000000/110000 = 90.9
+
+  private var batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, keyRange.begin, keyRange.end, BATCH_ROW_COUNT)
+  private var currentBatchIndex = -1
+
+  override def next(): Boolean = {
+    currentBatchIndex += 1
+    if (currentBatchIndex < batchItems.size) {
+      true
+    } else if (batchItems.size < BATCH_ROW_COUNT) {
+      false
+    } else {
+      // still need to fetch more
+      val newBatchBegin = KeySelector.firstGreaterThan(batchItems.last.getKey).getKey
+      batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, newBatchBegin, keyRange.end, BATCH_ROW_COUNT)
+      currentBatchIndex = 0
+      batchItems.nonEmpty
+    }
+  }
 
   override def get(): Row = {
-    val kv = iter.next()
+    val kv = batchItems(currentBatchIndex)
     RowFactory.create(Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1): _*)
   }
 
@@ -34,7 +51,7 @@ class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[S
   override def createDataReader(): DataReader[Row] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
-    new FdbDataReader(tableDefinition, storage.openTableAsList(tableDefinition.tableName).join())
+    new FdbDataReader(tableDefinition, storage, keyRange)
   }
 }
 
