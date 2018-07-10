@@ -52,7 +52,7 @@ class FdbStorage(domainId: String) {
       }
     }
 
-    if (created) {
+    if (!created) {
       Failure(new FdbException(s"Table $tableName already exists in domain: $domainId"))
     } else {
       getTableDefinition(tableName)
