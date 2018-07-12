@@ -143,10 +143,30 @@ class FdbStorage(domainId: String) {
 
     val storageColumnCount = tableDefinition.columnNames.size
 
+    val storageTypes = tableDefinition.columnTypes.toVector
+
     Success((row: Seq[AnyRef]) => {
       val storageRowCells = new Array[AnyRef](storageColumnCount)
       row.zipWithIndex.foreach{ case(cell, providedIndex) =>
-        storageRowCells.update(providedIndex2StorageIndexMap(providedIndex), cell)
+        val storageIndex = providedIndex2StorageIndexMap(providedIndex)
+        if (cell == null) {
+          storageRowCells.update(storageIndex, cell)
+        } else {
+          val translatedCellValue: AnyRef = storageTypes(storageIndex) match {
+            case ColumnDataType.DateType =>
+              cell match {
+                case c: java.time.LocalDate => Long.box(c.toEpochDay)
+                case c: java.sql.Date => Long.box(c.toLocalDate.toEpochDay)
+              }
+            case ColumnDataType.TimestampType =>
+              cell match {
+                case c: java.util.Date => Long.box(c.toInstant.toEpochMilli)
+              }
+            case _ =>
+              cell
+          }
+          storageRowCells.update(storageIndex, translatedCellValue)
+        }
       }
       storageRowCells
     })

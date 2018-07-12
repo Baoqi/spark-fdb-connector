@@ -1,6 +1,8 @@
 package org.apache.spark.sql.fdb
 
+import java.time.{Instant, LocalDate, LocalDateTime}
 import java.util
+import java.util.Date
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
@@ -36,7 +38,17 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
 
   override def get(): Row = {
     val kv = batchItems(currentBatchIndex)
-    RowFactory.create(Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1): _*)
+    val cellValues = Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1).zip(
+      tableDefinition.columnTypes
+    ).map{
+      case (v, colType) if colType == ColumnDataType.DateType && v != null =>
+        java.sql.Date.valueOf(LocalDate.ofEpochDay(v.asInstanceOf[java.lang.Number].longValue()))
+      case (v, colType) if colType == ColumnDataType.TimestampType && v != null =>
+        java.sql.Timestamp.from(Instant.ofEpochMilli(v.asInstanceOf[java.lang.Number].longValue()))
+      case (v, _) =>
+        v
+    }
+    RowFactory.create(cellValues: _*)
   }
 
   override def close(): Unit = ()
