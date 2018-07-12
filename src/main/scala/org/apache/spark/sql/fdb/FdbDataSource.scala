@@ -1,8 +1,7 @@
 package org.apache.spark.sql.fdb
 
-import java.time.{Instant, LocalDate, LocalDateTime}
+import java.time.{Instant, LocalDate}
 import java.util
-import java.util.Date
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
@@ -20,6 +19,7 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
 
   private var batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, keyRange.begin, keyRange.end, BATCH_ROW_COUNT)
   private var currentBatchIndex = -1
+  private val endKeySelector = KeySelector.firstGreaterOrEqual(keyRange.end)
 
   override def next(): Boolean = {
     currentBatchIndex += 1
@@ -29,8 +29,8 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
       false
     } else {
       // still need to fetch more
-      val newBatchBegin = KeySelector.firstGreaterThan(batchItems.last.getKey).getKey
-      batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, newBatchBegin, keyRange.end, BATCH_ROW_COUNT)
+      val newBatchBeginKeySelector = KeySelector.firstGreaterThan(batchItems.last.getKey)
+      batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, newBatchBeginKeySelector, endKeySelector, BATCH_ROW_COUNT)
       currentBatchIndex = 0
       batchItems.nonEmpty
     }

@@ -1,7 +1,7 @@
 package com.guandata.spark.fdb
 
 import com.apple.foundationdb.async.AsyncUtil
-import com.apple.foundationdb.{KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
+import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
@@ -225,6 +225,12 @@ class FdbStorage(domainId: String) {
   def rangeQueryAsVector(tableName: String, rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(rangeBegin, rangeEnd, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
+    }
+  }
+
+  def rangeQueryAsVector(tableName: String, beginKeySelector: KeySelector, endKeySelector: KeySelector, limit: Int): Vector[KeyValue] = {
+    FdbInstance.wrapDbFunction { tr =>
+      tr.getRange(beginKeySelector, endKeySelector, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
     }
   }
 
