@@ -2,13 +2,15 @@ package org.apache.spark.sql.fdb
 
 import java.time.{Instant, LocalDate}
 import java.util
+import java.util.Optional
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
-import com.guandata.spark.fdb.{ColumnDataType, FdbStorage, TableDefinition}
-import org.apache.spark.sql.{Row, RowFactory}
-import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport}
+import com.guandata.spark.fdb.{ColumnDataType, FdbException, FdbInstance, FdbStorage, TableDefinition}
+import org.apache.spark.sql.{Row, RowFactory, SaveMode}
+import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
 import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
+import org.apache.spark.sql.sources.v2.writer.{DataSourceWriter, DataWriter, DataWriterFactory, WriterCommitMessage}
 import org.apache.spark.sql.types.StructType
 
 import scala.collection.JavaConverters._
@@ -71,19 +73,7 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
   private val storage = new FdbStorage(domainId)
   private val tableDefinition = storage.getTableDefinition(tableName).get
   override def readSchema(): StructType = {
-    import org.apache.spark.sql.types._
-    StructType(tableDefinition.columnNames.zip(tableDefinition.columnTypes).map{ case (colName, colType) =>
-        val sparkType = colType match {
-          case ColumnDataType.LongType => LongType
-          case ColumnDataType.DoubleType => DoubleType
-          case ColumnDataType.FloatType => FloatType
-          case ColumnDataType.StringType => StringType
-          case ColumnDataType.TimestampType => TimestampType
-          case ColumnDataType.DateType => DateType
-          case ColumnDataType.UUIDType => StringType
-        }
-        StructField(name = colName, dataType = sparkType)
-    }.toArray)
+    FdbUtil.convertTableDefinitionToStructType(tableDefinition)
   }
 
   override def createDataReaderFactories(): util.List[DataReaderFactory[Row]] = {
@@ -98,10 +88,107 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
   }
 }
 
-class DefaultSource extends DataSourceV2 with ReadSupport {
+case class FdbWriterCommitMessage(message: String) extends WriterCommitMessage
+
+class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row] {
+  private val storage = new FdbStorage(domainId)
+  private var insertColumnNames: Option[Vector[String]] = None
+  override def commit(): WriterCommitMessage = {
+    FdbWriterCommitMessage("success")
+  }
+
+  override def abort(): Unit = {
+
+  }
+
+  override def write(record: Row): Unit = {
+    if (insertColumnNames.isEmpty) {
+      insertColumnNames = Option(record.schema.map{_.name}.toVector)
+    }
+    val cellValues = scala.Range(0, record.length).map{ i =>
+      record.get(i).asInstanceOf[AnyRef]
+    }
+    storage.insertRows(tableName, insertColumnNames.get, Seq(cellValues), enableMerge = false)
+  }
+}
+
+class FdbDataWriterFactory(domainId: String, tableName: String) extends DataWriterFactory[Row] {
+  override def createDataWriter(partitionId: Int, attemptNumber: Int): DataWriter[Row] = {
+    new FdbDataWriter(domainId = domainId, tableName = tableName)
+  }
+}
+
+class FdbDataSourceWriter(domainId: String, tableName: String) extends DataSourceWriter {
+  override def commit(messages: Array[WriterCommitMessage]): Unit = {
+  }
+
+  override def createWriterFactory(): DataWriterFactory[Row] = {
+    new FdbDataWriterFactory(domainId = domainId, tableName = tableName)
+  }
+
+  override def abort(messages: Array[WriterCommitMessage]): Unit = {
+  }
+}
+
+class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
   override def createReader(options: DataSourceOptions): DataSourceReader = {
     val domainId = options.get("domain").get()
     val tableName = options.get("table").get()
     new FdbDataSourceReader(domainId = domainId, tableName = tableName)
+  }
+
+  override def createWriter(jobId: String, schema: StructType, mode: SaveMode, options: DataSourceOptions): Optional[DataSourceWriter] = {
+    val domainId = options.get("domain").get()
+    val tableName = options.get("table").get()
+    val storage = new FdbStorage(domainId)
+    val tableDefinitionOpt = storage.getTableDefinition(tableName).toOption
+    var skip = false
+    var checkSchemaCompactible = false
+    var clearCurrentData = false
+    var createTable = false
+    if (tableDefinitionOpt.nonEmpty) {
+      mode match {
+        case SaveMode.Append =>
+          checkSchemaCompactible = true
+        case SaveMode.ErrorIfExists =>
+          throw new FdbException("Table already exists!")
+        case SaveMode.Ignore =>
+          skip = true
+        case SaveMode.Overwrite =>
+          checkSchemaCompactible = true
+          clearCurrentData = true
+      }
+    } else {
+      createTable = true
+    }
+
+    if (skip) {
+      Optional.empty[DataSourceWriter]()
+    } else {
+      if (checkSchemaCompactible) {
+        val existingTableStruct = FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).filterNot(_.name == FdbInstance.sysIdColumnName)
+        val toInsertStruct = schema.filterNot(_.name == FdbInstance.sysIdColumnName)
+        if (existingTableStruct != toInsertStruct) {
+          throw new FdbException("Insert Data don't compatible with existing table")
+        }
+      }
+
+      if (createTable) {
+        val columnNameTypes = schema.map{ field =>
+          if (field.name == FdbInstance.sysIdColumnName) {
+            field.name -> ColumnDataType.UUIDType
+          } else {
+            field.name -> ColumnDataType.from(field.dataType.toString)
+          }
+        }
+        storage.createTable(tableName, columnNameTypes, Option(columnNameTypes.exists(_._1 == FdbInstance.sysIdColumnName)).collect{ case true => FdbInstance.sysIdColumnName }.toSeq)
+      }
+
+      if (clearCurrentData) {
+        storage.truncateTable(tableName)
+      }
+
+      Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName))
+    }
   }
 }
