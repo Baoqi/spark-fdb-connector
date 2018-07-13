@@ -6,7 +6,7 @@ import java.util.Optional
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
-import com.guandata.spark.fdb.{ColumnDataType, FdbException, FdbInstance, FdbStorage, TableDefinition}
+import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage, TableDefinition}
 import org.apache.spark.sql.{Row, RowFactory, SaveMode}
 import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
 import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
@@ -91,9 +91,10 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
 case class FdbWriterCommitMessage(message: String) extends WriterCommitMessage
 
 class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row] {
-  private val storage = new FdbStorage(domainId)
+  private val writer = new FdbBufferedWriter(domainId = domainId, tableDefinition = new FdbStorage(domainId).getTableDefinition(tableName).get, enableMerge = false)
   private var insertColumnNames: Option[Vector[String]] = None
   override def commit(): WriterCommitMessage = {
+    writer.flush()
     FdbWriterCommitMessage("success")
   }
 
@@ -108,7 +109,7 @@ class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row]
     val cellValues = scala.Range(0, record.length).map{ i =>
       record.get(i).asInstanceOf[AnyRef]
     }
-    storage.insertRows(tableName, insertColumnNames.get, Seq(cellValues), enableMerge = false)
+    writer.insertRow(insertColumnNames.get, cellValues)
   }
 }
 

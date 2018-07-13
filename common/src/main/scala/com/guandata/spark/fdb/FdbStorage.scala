@@ -117,77 +117,11 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  private def getPrimaryKeyTupleFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String], insertValues: Seq[Seq[AnyRef]]): Try[Seq[AnyRef] => Tuple] = {
-    // how to get combined primary keys
-    val foundPkProviedIndecies: Seq[Int] = tableDefinition.primaryKeys.map{ pk => columnNames.indexOf(pk) }
-    if (foundPkProviedIndecies.forall(_ >= 0)) {
-      Success((row: Seq[AnyRef]) => {
-        Tuple.from(foundPkProviedIndecies.map{index => row(index)}: _*)
-      })
-    } else {
-      Failure(new FdbException(s"not all primary key values are provided when insert to table ${tableDefinition.tableName} in domain $domainId"))
-    }
-  }
-
-  private def getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String], insertValues: Seq[Seq[AnyRef]]): Try[Seq[AnyRef] => Array[AnyRef]] = {
-    /**
-      * The following code assume 2 types of indecies (starts from 0):
-      *   1. providedIndex:   This is provided inside columnNames parameter
-      *   2. storageIndex:  This is read out from tableDefinition
-      */
-    val storageName2StorageIndexMap = tableDefinition.columnNames.zipWithIndex.toMap
-
-    val providedIndex2StorageIndexMap = columnNames.zipWithIndex.map{ case (name, i) =>
-      i -> storageName2StorageIndexMap(name)
-    }.toMap
-
-    val storageColumnCount = tableDefinition.columnNames.size
-
-    val storageTypes = tableDefinition.columnTypes.toVector
-
-    Success((row: Seq[AnyRef]) => {
-      val storageRowCells = new Array[AnyRef](storageColumnCount)
-      row.zipWithIndex.foreach{ case(cell, providedIndex) =>
-        val storageIndex = providedIndex2StorageIndexMap(providedIndex)
-        if (cell == null) {
-          storageRowCells.update(storageIndex, cell)
-        } else {
-          val translatedCellValue: AnyRef = storageTypes(storageIndex) match {
-            case ColumnDataType.DateType =>
-              cell match {
-                case c: java.time.LocalDate => Long.box(c.toEpochDay)
-                case c: java.sql.Date => Long.box(c.toLocalDate.toEpochDay)
-              }
-            case ColumnDataType.TimestampType =>
-              cell match {
-                case c: java.util.Date => Long.box(c.toInstant.toEpochMilli)
-              }
-            case _ =>
-              cell
-          }
-          storageRowCells.update(storageIndex, translatedCellValue)
-        }
-      }
-      storageRowCells
-    })
-  }
-
-
   private def insertRows(tableDefinition: TableDefinition, columnNames: Seq[String], insertValues: Seq[Seq[AnyRef]], enableMerge: Boolean): Try[Boolean] = {
-    val tableName = tableDefinition.tableName
-    val dataDir = DirectoryLayer.getDefault.createOrOpen(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
-    for {
-      getPrimaryKeyFunc <- getPrimaryKeyTupleFuncCreator(tableDefinition, columnNames, insertValues)
-      getRowContentFunc <- getRowContentFuncCreator(tableDefinition, columnNames, insertValues)
-    } yield {
-      fdb.run { tr =>
-        insertValues.foreach { row =>
-          val rowContentTuple = Tuple.from(Boolean.box(false)).addAll(getRowContentFunc(row).toList.asJava)
-          tr.set(dataDir.pack(getPrimaryKeyFunc(row)), rowContentTuple.pack())
-        }
-      }
-      true
-    }
+    val writer = new FdbBufferedWriter(domainId, tableDefinition, enableMerge)
+    insertValues.foreach{ row => writer.insertRow(columnNames, row) }
+    writer.flush()
+    Success(true)
   }
 
   /**
