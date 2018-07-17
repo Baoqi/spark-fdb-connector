@@ -35,6 +35,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private val dataDir = DirectoryLayer.getDefault.createOrOpen(FdbInstance.fdb, List(domainId, tableDefinition.tableName).asJava, Array[Byte]()).join()
 
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
+  private var keyValueBufferByteSize: Long = 0
 
   private def _getPrimaryKeyTupleFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => Tuple] = {
     // how to get combined primary keys
@@ -93,8 +94,15 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
 
   def insertRow(columnNames: Seq[String], row: Seq[AnyRef]): Unit = {
     val rowContentTuple = Tuple.from(Boolean.box(false)).addAll(getRowContentFuncCreator.getCreatedFunc(columnNames)(row).toList.asJava)
-    keyValueBuffer.append(
-      dataDir.pack(getPrimaryKeyTupleFuncCreator.getCreatedFunc(columnNames)(row)) -> rowContentTuple.pack())
+
+    val k = dataDir.pack(getPrimaryKeyTupleFuncCreator.getCreatedFunc(columnNames)(row))
+    val v = rowContentTuple.pack()
+    if (keyValueBufferByteSize + k.size + v.size > 0.98 * MAX_TRANSACTION_BYTE_SIZE) {
+      flush()
+    }
+
+    keyValueBuffer.append(k -> v)
+    keyValueBufferByteSize += k.size + v.size
   }
 
   def flush(): Unit = {
@@ -103,5 +111,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
         tr.set(k, v)
       }
     }
+    keyValueBuffer.clear()
+    keyValueBufferByteSize = 0
   }
 }
