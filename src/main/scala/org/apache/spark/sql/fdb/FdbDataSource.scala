@@ -168,19 +168,19 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
       }
     } else {
       var skip = false
-      var checkSchemaCompactible = false
+      var checkSchemaCompatible = false
       var clearCurrentData = false
       var createTable = false
       if (tableDefinitionOpt.nonEmpty) {
         mode match {
           case SaveMode.Append =>
-            checkSchemaCompactible = true
+            checkSchemaCompatible = true
           case SaveMode.ErrorIfExists =>
             throw new FdbException("Table already exists!")
           case SaveMode.Ignore =>
             skip = true
           case SaveMode.Overwrite =>
-            checkSchemaCompactible = true
+            checkSchemaCompatible = true
             clearCurrentData = true
         }
       } else {
@@ -190,7 +190,7 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
       if (skip) {
         Optional.empty[DataSourceWriter]()
       } else {
-        if (checkSchemaCompactible) {
+        if (checkSchemaCompatible) {
           val existingTableStruct = FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).filterNot(_.name == FdbInstance.sysIdColumnName)
           val toInsertStruct = schema.filterNot(_.name == FdbInstance.sysIdColumnName)
           if (existingTableStruct != toInsertStruct) {
