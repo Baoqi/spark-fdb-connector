@@ -1,5 +1,7 @@
 package com.guandata.spark.fdb
 
+import java.util.Arrays
+
 import com.apple.foundationdb.async.AsyncUtil
 import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
 import com.apple.foundationdb.directory.DirectoryLayer
@@ -178,6 +180,10 @@ class FdbStorage(domainId: String) {
         keyLocalityRanges = AsyncUtil.collectRemaining(closableIterator).join().asScala.toList
       } finally {
         closableIterator.close()
+      }
+
+      if (keyLocalityRanges.nonEmpty && !Arrays.equals(keyLocalityRanges.head, dirRange.begin)) {
+        keyLocalityRanges = List(dirRange.begin) ++ keyLocalityRanges
       }
 
       val splitRanges = if (keyLocalityRanges.nonEmpty) {
