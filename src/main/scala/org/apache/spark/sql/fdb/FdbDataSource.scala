@@ -6,7 +6,7 @@ import java.util.Optional
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
-import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage, TableDefinition}
+import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage, TableDefinition}
 import org.apache.spark.sql.{Row, RowFactory, SaveMode}
 import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
 import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
@@ -90,9 +90,18 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
 
 case class FdbWriterCommitMessage(message: String) extends WriterCommitMessage
 
-class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row] {
-  private val writer = new FdbBufferedWriter(domainId = domainId, tableDefinition = new FdbStorage(domainId).getTableDefinition(tableName).get, enableMerge = false)
+class FdbDataWriter(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriter[Row] {
+  private val tableDefinition = new FdbStorage(domainId).getTableDefinition(tableName).get
+  private val writer = {
+    if (isDeleteRows) {
+      new FdbBufferedDeleter(domainId = domainId, tableDefinition = tableDefinition)
+    } else {
+      new FdbBufferedWriter(domainId = domainId, tableDefinition = tableDefinition, enableMerge = false)
+    }
+  }
+
   private var insertColumnNames: Option[Vector[String]] = None
+
   override def commit(): WriterCommitMessage = {
     writer.flush()
     FdbWriterCommitMessage("success")
@@ -104,7 +113,11 @@ class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row]
 
   override def write(record: Row): Unit = {
     if (insertColumnNames.isEmpty) {
-      insertColumnNames = Option(record.schema.map{_.name}.toVector)
+      insertColumnNames = if (isDeleteRows) {
+        Option(tableDefinition.primaryKeys.toVector)
+      } else {
+        Option(record.schema.map{_.name}.toVector)
+      }
     }
     val cellValues = scala.Range(0, record.length).map{ i =>
       record.get(i).asInstanceOf[AnyRef]
@@ -113,18 +126,18 @@ class FdbDataWriter(domainId: String, tableName: String) extends DataWriter[Row]
   }
 }
 
-class FdbDataWriterFactory(domainId: String, tableName: String) extends DataWriterFactory[Row] {
+class FdbDataWriterFactory(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriterFactory[Row] {
   override def createDataWriter(partitionId: Int, attemptNumber: Int): DataWriter[Row] = {
-    new FdbDataWriter(domainId = domainId, tableName = tableName)
+    new FdbDataWriter(domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
   }
 }
 
-class FdbDataSourceWriter(domainId: String, tableName: String) extends DataSourceWriter {
+class FdbDataSourceWriter(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataSourceWriter {
   override def commit(messages: Array[WriterCommitMessage]): Unit = {
   }
 
   override def createWriterFactory(): DataWriterFactory[Row] = {
-    new FdbDataWriterFactory(domainId = domainId, tableName = tableName)
+    new FdbDataWriterFactory(domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
   }
 
   override def abort(messages: Array[WriterCommitMessage]): Unit = {
@@ -143,53 +156,65 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
     val tableName = options.get("table").get()
     val storage = new FdbStorage(domainId)
     val tableDefinitionOpt = storage.getTableDefinition(tableName).toOption
-    var skip = false
-    var checkSchemaCompactible = false
-    var clearCurrentData = false
-    var createTable = false
-    if (tableDefinitionOpt.nonEmpty) {
-      mode match {
-        case SaveMode.Append =>
-          checkSchemaCompactible = true
-        case SaveMode.ErrorIfExists =>
-          throw new FdbException("Table already exists!")
-        case SaveMode.Ignore =>
-          skip = true
-        case SaveMode.Overwrite =>
-          checkSchemaCompactible = true
-          clearCurrentData = true
+
+    val isDeleteRows = options.getBoolean("isDeleteRows", false)
+    if (isDeleteRows) {
+      if (tableDefinitionOpt.isEmpty) {
+        throw new FdbException("Table not exists!")
+      } else if (tableDefinitionOpt.get.primaryKeys.size != schema.fields.length) {
+        throw new FdbException("Not all primary keys are provided, to DELETE rows, the source DataSet should and only contains all primary key values!")
+      } else {
+        Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName, isDeleteRows = true))
       }
     } else {
-      createTable = true
-    }
-
-    if (skip) {
-      Optional.empty[DataSourceWriter]()
-    } else {
-      if (checkSchemaCompactible) {
-        val existingTableStruct = FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).filterNot(_.name == FdbInstance.sysIdColumnName)
-        val toInsertStruct = schema.filterNot(_.name == FdbInstance.sysIdColumnName)
-        if (existingTableStruct != toInsertStruct) {
-          throw new FdbException("Insert Data don't compatible with existing table")
+      var skip = false
+      var checkSchemaCompactible = false
+      var clearCurrentData = false
+      var createTable = false
+      if (tableDefinitionOpt.nonEmpty) {
+        mode match {
+          case SaveMode.Append =>
+            checkSchemaCompactible = true
+          case SaveMode.ErrorIfExists =>
+            throw new FdbException("Table already exists!")
+          case SaveMode.Ignore =>
+            skip = true
+          case SaveMode.Overwrite =>
+            checkSchemaCompactible = true
+            clearCurrentData = true
         }
+      } else {
+        createTable = true
       }
 
-      if (createTable) {
-        val columnNameTypes = schema.map{ field =>
-          if (field.name == FdbInstance.sysIdColumnName) {
-            field.name -> ColumnDataType.UUIDType
-          } else {
-            field.name -> ColumnDataType.from(field.dataType.toString)
+      if (skip) {
+        Optional.empty[DataSourceWriter]()
+      } else {
+        if (checkSchemaCompactible) {
+          val existingTableStruct = FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).filterNot(_.name == FdbInstance.sysIdColumnName)
+          val toInsertStruct = schema.filterNot(_.name == FdbInstance.sysIdColumnName)
+          if (existingTableStruct != toInsertStruct) {
+            throw new FdbException("Insert Data don't compatible with existing table")
           }
         }
-        storage.createTable(tableName, columnNameTypes, Option(columnNameTypes.exists(_._1 == FdbInstance.sysIdColumnName)).collect{ case true => FdbInstance.sysIdColumnName }.toSeq)
-      }
 
-      if (clearCurrentData) {
-        storage.truncateTable(tableName)
-      }
+        if (createTable) {
+          val columnNameTypes = schema.map { field =>
+            if (field.name == FdbInstance.sysIdColumnName) {
+              field.name -> ColumnDataType.UUIDType
+            } else {
+              field.name -> ColumnDataType.from(field.dataType.toString)
+            }
+          }
+          storage.createTable(tableName, columnNameTypes, Option(columnNameTypes.exists(_._1 == FdbInstance.sysIdColumnName)).collect { case true => FdbInstance.sysIdColumnName }.toSeq)
+        }
 
-      Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName))
+        if (clearCurrentData) {
+          storage.truncateTable(tableName)
+        }
+
+        Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName, isDeleteRows = false))
+      }
     }
   }
 }

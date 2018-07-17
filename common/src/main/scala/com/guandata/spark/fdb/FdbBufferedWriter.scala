@@ -1,5 +1,6 @@
 package com.guandata.spark.fdb
 
+import com.apple.foundationdb.Transaction
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
@@ -27,7 +28,7 @@ private [fdb] class memorized[T](tableDefinition: TableDefinition, creatorFunc: 
 
 
 class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enableMerge: Boolean) {
-  private val MAX_TRANSACTION_BYTE_SIZE = 10000000
+  protected val MAX_TRANSACTION_BYTE_SIZE = 10000000
 
   private val getPrimaryKeyTupleFuncCreator = new memorized(tableDefinition, _getPrimaryKeyTupleFuncCreator)
   private val getRowContentFuncCreator = new memorized(tableDefinition, _getRowContentFuncCreator)
@@ -93,11 +94,9 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   }
 
   def insertRow(columnNames: Seq[String], row: Seq[AnyRef]): Unit = {
-    val rowContentTuple = Tuple.from(Boolean.box(false)).addAll(getRowContentFuncCreator.getCreatedFunc(columnNames)(row).toList.asJava)
-
     val k = dataDir.pack(getPrimaryKeyTupleFuncCreator.getCreatedFunc(columnNames)(row))
-    val v = rowContentTuple.pack()
-    if (keyValueBufferByteSize + k.size + v.size > 0.98 * MAX_TRANSACTION_BYTE_SIZE) {
+    val v = packValue(columnNames, row)
+    if (keyValueBufferByteSize + k.size + v.size > getBatchByteSize) {
       flush()
     }
 
@@ -108,10 +107,38 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   def flush(): Unit = {
     FdbInstance.fdb.run { tr =>
       keyValueBuffer.foreach{ case (k, v) =>
-        tr.set(k, v)
+        realAction(tr, k, v)
       }
     }
     keyValueBuffer.clear()
     keyValueBufferByteSize = 0
   }
+
+  /**
+    * The following are to be overrided
+    */
+  def packValue(columnNames: Seq[String], row: Seq[AnyRef]): Array[Byte] = {
+    val rowContentTuple = Tuple.from(Boolean.box(false)).addAll(getRowContentFuncCreator.getCreatedFunc(columnNames)(row).toList.asJava)
+    rowContentTuple.pack()
+  }
+
+  def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]) = {
+    tr.set(k, v)
+  }
+
+  def getBatchByteSize = 0.98 * MAX_TRANSACTION_BYTE_SIZE
+}
+
+
+class FdbBufferedDeleter(domainId: String, tableDefinition: TableDefinition) extends FdbBufferedWriter(domainId, tableDefinition, enableMerge = false) {
+  private val emptyArray = new Array[Byte](0)
+  override def packValue(columnNames: Seq[String], row: Seq[AnyRef]): Array[Byte] = {
+    emptyArray
+  }
+
+  override def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]) = {
+    tr.clear(Tuple.fromBytes(k).range())
+  }
+
+  override def getBatchByteSize: Double = 0.01 * MAX_TRANSACTION_BYTE_SIZE
 }
