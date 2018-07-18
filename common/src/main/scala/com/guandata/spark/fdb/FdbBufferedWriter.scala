@@ -122,7 +122,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
 
 class FdbBufferedDeleter(domainId: String, tableDefinition: TableDefinition) extends FdbBufferedWriter(domainId, tableDefinition, enableMerge = false) {
   override def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
-    tr.clear(Tuple.fromBytes(k).range())
+    tr.clear(k, Tuple.fromBytes(k).range().end)
   }
 
   override def getBatchByteSize: Double = 0.01 * MAX_TRANSACTION_BYTE_SIZE
