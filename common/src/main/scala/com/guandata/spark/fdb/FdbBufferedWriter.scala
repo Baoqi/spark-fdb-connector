@@ -6,7 +6,7 @@ import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
-import scala.util.{Failure, Success, Try}
+import scala.util.{Success, Try}
 
 
 private [fdb] class memorized[T](tableDefinition: TableDefinition, creatorFunc: (TableDefinition, Seq[String]) => Try[Seq[AnyRef] => T]) {
@@ -30,7 +30,6 @@ private [fdb] class memorized[T](tableDefinition: TableDefinition, creatorFunc: 
 class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enableMerge: Boolean) {
   protected val MAX_TRANSACTION_BYTE_SIZE = 10000000
 
-  private val getPrimaryKeyTupleFuncCreator = new memorized(tableDefinition, _getPrimaryKeyTupleFuncCreator)
   private val getRowContentFuncCreator = new memorized(tableDefinition, _getRowContentFuncCreator)
 
   private val dataDir = DirectoryLayer.getDefault.createOrOpen(FdbInstance.fdb, List(domainId, tableDefinition.tableName).asJava, Array[Byte]()).join()
@@ -38,19 +37,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
   private var keyValueBufferByteSize: Long = 0
 
-  private def _getPrimaryKeyTupleFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => Tuple] = {
-    // how to get combined primary keys
-    val foundPkProviedIndecies: Seq[Int] = tableDefinition.primaryKeys.map{ pk => columnNames.indexOf(pk) }
-    if (foundPkProviedIndecies.forall(_ >= 0)) {
-      Success((row: Seq[AnyRef]) => {
-        Tuple.from(foundPkProviedIndecies.map{index => row(index)}: _*)
-      })
-    } else {
-      Failure(new FdbException(s"not all primary key values are provided when insert to table ${tableDefinition.tableName} in domain $domainId"))
-    }
-  }
-
-  private def _getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => Array[AnyRef]] = {
+  private def _getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => (Array[AnyRef], Array[AnyRef])] = {
     /**
       * The following code assume 2 types of indecies (starts from 0):
       *   1. providedIndex:   This is provided inside columnNames parameter
@@ -89,13 +76,15 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
           storageRowCells.update(storageIndex, translatedCellValue)
         }
       }
-      storageRowCells
+      val pkColumnCount = tableDefinition.primaryKeys.size
+      (storageRowCells.slice(0, pkColumnCount), storageRowCells.drop(pkColumnCount))
     })
   }
 
   def insertRow(columnNames: Seq[String], row: Seq[AnyRef]): Unit = {
-    val k = dataDir.pack(getPrimaryKeyTupleFuncCreator.getCreatedFunc(columnNames)(row))
-    val v = packValue(columnNames, row)
+    val (keyItems, valueItems) = getRowContentFuncCreator.getCreatedFunc(columnNames)(row)
+    val k = dataDir.pack(Tuple.from(keyItems: _*))
+    val v = Tuple.from(Boolean.box(false)).addAll(valueItems.toList.asJava).pack()
     if (keyValueBufferByteSize + k.size + v.size > getBatchByteSize) {
       flush()
     }
@@ -117,26 +106,17 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   /**
     * The following are to be overrided
     */
-  def packValue(columnNames: Seq[String], row: Seq[AnyRef]): Array[Byte] = {
-    val rowContentTuple = Tuple.from(Boolean.box(false)).addAll(getRowContentFuncCreator.getCreatedFunc(columnNames)(row).toList.asJava)
-    rowContentTuple.pack()
-  }
 
-  def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]) = {
+  def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
     tr.set(k, v)
   }
 
-  def getBatchByteSize = 0.98 * MAX_TRANSACTION_BYTE_SIZE
+  def getBatchByteSize: Double = 0.98 * MAX_TRANSACTION_BYTE_SIZE
 }
 
 
 class FdbBufferedDeleter(domainId: String, tableDefinition: TableDefinition) extends FdbBufferedWriter(domainId, tableDefinition, enableMerge = false) {
-  private val emptyArray = new Array[Byte](0)
-  override def packValue(columnNames: Seq[String], row: Seq[AnyRef]): Array[Byte] = {
-    emptyArray
-  }
-
-  override def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]) = {
+  override def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
     tr.clear(Tuple.fromBytes(k).range())
   }
 

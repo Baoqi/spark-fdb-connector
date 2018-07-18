@@ -152,10 +152,10 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
-    val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
-    val range = dataDir.range()
+  def openDataDir(tableName: String) = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
 
+  def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
+    val range = openDataDir(tableName).range()
     rangeQueryAsVector(tableName, range.begin, range.end, limit).map{ kv =>
       Tuple.fromBytes(kv.getValue).getItems.asScala
     }
@@ -174,7 +174,7 @@ class FdbStorage(domainId: String) {
   }
 
   def getLocalityInfo(tableName: String): Seq[(List[String], Range)]  = {
-    val dataDir = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
+    val dataDir = openDataDir(tableName)
     FdbInstance.wrapDbFunction { tr =>
       val dirRange = dataDir.range(Tuple.from())
       val closableIterator = LocalityUtil.getBoundaryKeys(tr, dirRange.begin, dirRange.end)

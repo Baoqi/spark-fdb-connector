@@ -22,6 +22,7 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
   private var batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, keyRange.begin, keyRange.end, BATCH_ROW_COUNT)
   private var currentBatchIndex = -1
   private val endKeySelector = KeySelector.firstGreaterOrEqual(keyRange.end)
+  private val dataDir = storage.openDataDir(tableDefinition.tableName)
 
   override def next(): Boolean = {
     currentBatchIndex += 1
@@ -40,7 +41,7 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
 
   override def get(): Row = {
     val kv = batchItems(currentBatchIndex)
-    val cellValues = Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1).zip(
+    val cellValues = (dataDir.unpack(kv.getKey).getItems.asScala ++ Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1)).zip(
       tableDefinition.columnTypes
     ).map{
       case (v, colType) if colType == ColumnDataType.DateType && v != null =>
