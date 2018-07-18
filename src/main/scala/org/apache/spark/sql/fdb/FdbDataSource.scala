@@ -1,12 +1,9 @@
 package org.apache.spark.sql.fdb
 
-import java.time.{Instant, LocalDate}
-import java.util
 import java.util.{Optional, UUID}
 
-import com.apple.foundationdb.{KeySelector, Range}
-import com.apple.foundationdb.tuple.Tuple
-import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage, TableDefinition}
+import com.apple.foundationdb.Range
+import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, FdbBufferedReader, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage}
 import org.apache.spark.sql.{Row, RowFactory, SaveMode}
 import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
 import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
@@ -16,58 +13,16 @@ import org.apache.spark.sql.types.StructType
 import scala.collection.JavaConverters._
 
 
-class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range) extends DataReader[Row] {
-  private val BATCH_ROW_COUNT = 90    //  key max size: 10,000, value max size 100,000,  transaction max size: 10,000,000 bytes, so, 10000000/110000 = 90.9
-
-  private var batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, keyRange.begin, keyRange.end, BATCH_ROW_COUNT)
-  private var currentBatchIndex = -1
-  private val endKeySelector = KeySelector.firstGreaterOrEqual(keyRange.end)
-  private val dataDir = storage.openDataDir(tableDefinition.tableName)
-
-  override def next(): Boolean = {
-    currentBatchIndex += 1
-    if (currentBatchIndex < batchItems.size) {
-      true
-    } else if (batchItems.size < BATCH_ROW_COUNT) {
-      false
-    } else {
-      // still need to fetch more
-      val newBatchBeginKeySelector = KeySelector.firstGreaterThan(batchItems.last.getKey)
-      batchItems = storage.rangeQueryAsVector(tableDefinition.tableName, newBatchBeginKeySelector, endKeySelector, BATCH_ROW_COUNT)
-      currentBatchIndex = 0
-      batchItems.nonEmpty
-    }
-  }
+class FdbDataReader(reader: FdbBufferedReader) extends DataReader[Row] {
+  override def next(): Boolean = reader.next()
 
   override def get(): Row = {
-    val kv = batchItems(currentBatchIndex)
-    val cellValues = (dataDir.unpack(kv.getKey).getItems.asScala ++ Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1)).zip(
-      tableDefinition.columnTypes
-    ).map{
-      case (v, colType) if colType == ColumnDataType.DateType && v != null =>
-        java.sql.Date.valueOf(LocalDate.ofEpochDay(v.asInstanceOf[java.lang.Number].longValue()))
-      case (v, colType) if colType == ColumnDataType.TimestampType && v != null =>
-        java.sql.Timestamp.from(Instant.ofEpochMilli(v.asInstanceOf[java.lang.Number].longValue()))
-      case (v, colType) if colType == ColumnDataType.UUIDType && v != null =>
-        v match {
-          case uuid: UUID =>
-            uuid.toString.replaceAllLiterally("-", "")
-          case _ =>
-            v
-        }
-      case (v, colType) if colType == ColumnDataType.MapType && v != null =>
-        v match {
-          case elems: java.util.List[AnyRef] =>
-            val keyParts = elems.asScala.zipWithIndex.collect{
-              case (v, i) if i % 2 == 0 => v.asInstanceOf[String]
-            }
-            val valueParts = elems.asScala.zipWithIndex.collect{
-              case (v, i) if i % 2 == 1 => v.asInstanceOf[String]
-            }
-            keyParts.zip(valueParts).toMap
-        }
-      case (v, _) =>
-        v
+    // Spark don't support UUID, we need to cast UUID to String
+    val cellValues = reader.get().map{
+      case cell: UUID if cell != null =>
+        cell.toString.replaceAllLiterally("-", "")
+      case cell =>
+        cell
     }
     RowFactory.create(cellValues: _*)
   }
@@ -84,7 +39,7 @@ class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[S
   override def createDataReader(): DataReader[Row] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
-    new FdbDataReader(tableDefinition, storage, new Range(begin, end))
+    new FdbDataReader(new FdbBufferedReader(tableDefinition, storage, new Range(begin, end)))
   }
 }
 
@@ -95,7 +50,7 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
     FdbUtil.convertTableDefinitionToStructType(tableDefinition)
   }
 
-  override def createDataReaderFactories(): util.List[DataReaderFactory[Row]] = {
+  override def createDataReaderFactories(): java.util.List[DataReaderFactory[Row]] = {
     val localityInfos = storage.getLocalityInfo(tableName)
     localityInfos.map{ case (locations, range) =>
       new FdbDataReaderFactory(domainId = domainId,

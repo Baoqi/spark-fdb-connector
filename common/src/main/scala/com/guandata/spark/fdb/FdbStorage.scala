@@ -1,10 +1,8 @@
 package com.guandata.spark.fdb
 
-import java.util.Arrays
-
 import com.apple.foundationdb.async.AsyncUtil
 import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
-import com.apple.foundationdb.directory.DirectoryLayer
+import com.apple.foundationdb.directory.{DirectoryLayer, DirectorySubspace}
 import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
@@ -37,7 +35,7 @@ class FdbStorage(domainId: String) {
       // primary keys should be put in the beginning,  To simplify processing logic
       val existedPrimaryKeysSet = existedPrimaryKeys.toSet
       val (keyPart, otherPart) = columnNameTypes.partition{ d => existedPrimaryKeysSet.contains(d._1) }
-      ((keyPart ++ otherPart), existedPrimaryKeys)
+      (keyPart ++ otherPart, existedPrimaryKeys)
     } else {
       (
         Seq(FdbInstance.sysIdColumnName -> ColumnDataType.UUIDType) ++ columnNameTypes,
@@ -152,22 +150,22 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  def openDataDir(tableName: String) = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
+  def openDataDir(tableName: String): DirectorySubspace = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
     val range = openDataDir(tableName).range()
-    rangeQueryAsVector(tableName, range.begin, range.end, limit).map{ kv =>
+    rangeQueryAsVector(range.begin, range.end, limit).map{ kv =>
       Tuple.fromBytes(kv.getValue).getItems.asScala
     }
   }
 
-  def rangeQueryAsVector(tableName: String, rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
+  def rangeQueryAsVector(rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(rangeBegin, rangeEnd, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
     }
   }
 
-  def rangeQueryAsVector(tableName: String, beginKeySelector: KeySelector, endKeySelector: KeySelector, limit: Int): Vector[KeyValue] = {
+  def rangeQueryAsVector(beginKeySelector: KeySelector, endKeySelector: KeySelector, limit: Int): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(beginKeySelector, endKeySelector, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
     }
@@ -185,7 +183,7 @@ class FdbStorage(domainId: String) {
         closableIterator.close()
       }
 
-      if (keyLocalityRanges.nonEmpty && !Arrays.equals(keyLocalityRanges.head, dirRange.begin)) {
+      if (keyLocalityRanges.nonEmpty && !java.util.Arrays.equals(keyLocalityRanges.head, dirRange.begin)) {
         keyLocalityRanges = List(dirRange.begin) ++ keyLocalityRanges
       }
 
