@@ -2,7 +2,7 @@ package org.apache.spark.sql.fdb
 
 import java.time.{Instant, LocalDate}
 import java.util
-import java.util.Optional
+import java.util.{Optional, UUID}
 
 import com.apple.foundationdb.{KeySelector, Range}
 import com.apple.foundationdb.tuple.Tuple
@@ -48,6 +48,13 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
         java.sql.Date.valueOf(LocalDate.ofEpochDay(v.asInstanceOf[java.lang.Number].longValue()))
       case (v, colType) if colType == ColumnDataType.TimestampType && v != null =>
         java.sql.Timestamp.from(Instant.ofEpochMilli(v.asInstanceOf[java.lang.Number].longValue()))
+      case (v, colType) if colType == ColumnDataType.UUIDType && v != null =>
+        v match {
+          case uuid: UUID =>
+            uuid.toString.replaceAllLiterally("-", "")
+          case _ =>
+            v
+        }
       case (v, _) =>
         v
     }

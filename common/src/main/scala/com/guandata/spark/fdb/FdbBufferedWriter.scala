@@ -70,6 +70,11 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
               cell match {
                 case c: java.util.Date => Long.box(c.toInstant.toEpochMilli)
               }
+            case ColumnDataType.UUIDType =>
+              cell match {
+                case c: java.lang.String => FdbInstance.convertUUIDCompactStringToUUID(c)
+                case _ => cell
+              }
             case _ =>
               cell
           }
