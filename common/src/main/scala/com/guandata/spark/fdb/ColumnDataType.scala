@@ -24,6 +24,13 @@ object ColumnDataType {
   }
 
   /**
+    * NOTE: currently only MapType[StringType, StringType] is supported
+    */
+  final case object MapType extends ColumnDataType {
+    val value = "MapType"
+  }
+
+  /**
     * NOTE: this is not supported by Spark yet
     */
   final case object UUIDType extends ColumnDataType {
@@ -38,6 +45,7 @@ object ColumnDataType {
       case StringType.value => StringType
       case TimestampType.value => TimestampType
       case DateType.value => DateType
+      case MapType.value => MapType
       case UUIDType.value => UUIDType
     }
   }

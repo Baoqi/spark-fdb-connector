@@ -3,8 +3,11 @@ package org.apache.spark.sql.fdb
 import com.guandata.spark.fdb.{ColumnDataType, TableDefinition}
 
 object FdbUtil {
+  import org.apache.spark.sql.types._
+
+  val StringMapType = new MapType(StringType, StringType, valueContainsNull = false)
+
   def convertTableDefinitionToStructType(tableDefinition: TableDefinition) = {
-    import org.apache.spark.sql.types._
     StructType(tableDefinition.columnNames.zip(tableDefinition.columnTypes).map{ case (colName, colType) =>
       val sparkType = colType match {
         case ColumnDataType.LongType => LongType
@@ -13,6 +16,7 @@ object FdbUtil {
         case ColumnDataType.StringType => StringType
         case ColumnDataType.TimestampType => TimestampType
         case ColumnDataType.DateType => DateType
+        case ColumnDataType.MapType => StringMapType
         case ColumnDataType.UUIDType => StringType
       }
       StructField(name = colName, dataType = sparkType)

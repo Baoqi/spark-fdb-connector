@@ -55,6 +55,17 @@ class FdbDataReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRa
           case _ =>
             v
         }
+      case (v, colType) if colType == ColumnDataType.MapType && v != null =>
+        v match {
+          case elems: java.util.List[AnyRef] =>
+            val keyParts = elems.asScala.zipWithIndex.collect{
+              case (v, i) if i % 2 == 0 => v.asInstanceOf[String]
+            }
+            val valueParts = elems.asScala.zipWithIndex.collect{
+              case (v, i) if i % 2 == 1 => v.asInstanceOf[String]
+            }
+            keyParts.zip(valueParts).toMap
+        }
       case (v, _) =>
         v
     }

@@ -37,6 +37,14 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
   private var keyValueBufferByteSize: Long = 0
 
+  private def convertMapToJavaList(map: Map[AnyRef, AnyRef]) = {
+    map.withFilter{ case (k, v) =>
+      k != null && v != null
+    }.map{ case(k, v) =>
+      List(k, v)
+    }.flatten.toList.asJava
+  }
+
   private def _getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => (Array[AnyRef], Array[AnyRef])] = {
     /**
       * The following code assume 2 types of indecies (starts from 0):
@@ -74,6 +82,13 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
               cell match {
                 case c: java.lang.String => FdbInstance.convertUUIDCompactStringToUUID(c)
                 case _ => cell
+              }
+            case ColumnDataType.MapType =>
+              cell match {
+                case c: java.util.Map[AnyRef, AnyRef] =>
+                  convertMapToJavaList(c.asScala.toMap)
+                case c: Map[AnyRef, AnyRef] =>
+                  convertMapToJavaList(c)
               }
             case _ =>
               cell
