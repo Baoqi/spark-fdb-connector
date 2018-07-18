@@ -22,4 +22,19 @@ object FdbInstance {
     }
     result
   }
+
+  def convertUUIDCompactStringToUUID(str: String) = {
+    val shortUUIDCharArray = str.toCharArray
+    new StringBuilder(38)
+      .append(shortUUIDCharArray.subSequence(0, 8))
+      .append('-')
+      .append(shortUUIDCharArray.subSequence(8, 12))
+      .append('-')
+      .append(shortUUIDCharArray.subSequence(12, 16))
+      .append('-')
+      .append(shortUUIDCharArray.subSequence(16, 20))
+      .append('-')
+      .append(shortUUIDCharArray.subSequence(20, 32))
+      .toString()
+  }
 }

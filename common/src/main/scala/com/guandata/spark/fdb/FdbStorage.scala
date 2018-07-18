@@ -34,7 +34,10 @@ class FdbStorage(domainId: String) {
 
     // insert into schema
     val (checkedColumnNameTypes, checkedPrimaryKeys) = if (existedPrimaryKeys.nonEmpty) {
-      (columnNameTypes, existedPrimaryKeys)
+      // primary keys should be put in the beginning,  To simplify processing logic
+      val existedPrimaryKeysSet = existedPrimaryKeys.toSet
+      val (keyPart, otherPart) = columnNameTypes.partition{ d => existedPrimaryKeysSet.contains(d._1) }
+      ((keyPart ++ otherPart), existedPrimaryKeys)
     } else {
       (
         Seq(FdbInstance.sysIdColumnName -> ColumnDataType.UUIDType) ++ columnNameTypes,
