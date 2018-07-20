@@ -153,9 +153,10 @@ class FdbStorage(domainId: String) {
   def openDataDir(tableName: String): DirectorySubspace = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
-    val range = openDataDir(tableName).range()
+    val dataDir = openDataDir(tableName)
+    val range = dataDir.range()
     rangeQueryAsVector(range.begin, range.end, limit).map{ kv =>
-      Tuple.fromBytes(kv.getValue).getItems.asScala
+      dataDir.unpack(kv.getKey()).getItems.asScala ++ Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1)
     }
   }
 

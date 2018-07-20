@@ -32,6 +32,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
 
   private val getRowContentFuncCreator = new memorized(tableDefinition, _getRowContentFuncCreator)
 
+  private val storage = new FdbStorage(domainId)
   private val dataDir = DirectoryLayer.getDefault.createOrOpen(FdbInstance.fdb, List(domainId, tableDefinition.tableName).asJava, Array[Byte]()).join()
 
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
@@ -40,12 +41,12 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private def convertMapToJavaList(map: Map[AnyRef, AnyRef]) = {
     map.withFilter{ case (k, v) =>
       k != null && v != null
-    }.map{ case(k, v) =>
+    }.flatMap{ case(k, v) =>
       List(k, v)
-    }.flatten.toList.asJava
+    }.toList.asJava
   }
 
-  private def _getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => (Array[AnyRef], Array[AnyRef])] = {
+  private def _getRowContentFuncCreator(tableDefinition: TableDefinition, columnNames: Seq[String]): Try[Seq[AnyRef] => (Array[AnyRef], Vector[AnyRef])] = {
     /**
       * The following code assume 2 types of indecies (starts from 0):
       *   1. providedIndex:   This is provided inside columnNames parameter
@@ -97,13 +98,38 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
         }
       }
       val pkColumnCount = tableDefinition.primaryKeys.size
-      (storageRowCells.slice(0, pkColumnCount), storageRowCells.drop(pkColumnCount))
+      (storageRowCells.slice(0, pkColumnCount), storageRowCells.drop(pkColumnCount).toVector)
     })
   }
 
+  private def mergeRow(rawNewRow: Vector[AnyRef], rawOldRow: Vector[AnyRef]) = {
+    val maxLength = math.max(rawNewRow.size, rawOldRow.size)
+
+    val newRow = if (rawNewRow.size < maxLength) { rawNewRow ++ Vector.fill[AnyRef](maxLength - rawNewRow.size)(null.asInstanceOf[AnyRef]) } else rawNewRow
+    val oldRow = if (rawOldRow.size < maxLength) { rawOldRow ++ Vector.fill[AnyRef](maxLength - rawOldRow.size)(null.asInstanceOf[AnyRef]) } else rawOldRow
+
+    newRow.indices.map{ i =>
+      if (newRow(i) != null) {
+        newRow(i)
+      } else {
+        oldRow(i)
+      }
+    }.toVector
+  }
+
   def insertRow(columnNames: Seq[String], row: Seq[AnyRef]): Unit = {
-    val (keyItems, valueItems) = getRowContentFuncCreator.getCreatedFunc(columnNames)(row)
-    val k = dataDir.pack(Tuple.from(keyItems: _*))
+    val (keyItems, rawValueItems) = getRowContentFuncCreator.getCreatedFunc(columnNames)(row)
+
+    val keyTuple = Tuple.from(keyItems: _*)
+    val k = dataDir.pack(keyTuple)
+    var valueItems = rawValueItems
+    if (enableMerge) {
+      val foundRows = storage.rangeQueryAsVector(k, dataDir.range(keyTuple).end, FdbBufferedReader.BATCH_ROW_COUNT)
+      if (foundRows.nonEmpty) {
+        val existingCellValues = Tuple.fromBytes(foundRows.head.getValue).getItems.asScala.drop(1).toVector
+        valueItems = mergeRow(rawNewRow = rawValueItems, rawOldRow = existingCellValues)
+      }
+    }
     val v = Tuple.from(Boolean.box(false)).addAll(valueItems.toList.asJava).pack()
     if (keyValueBufferByteSize + k.size + v.size > getBatchByteSize) {
       flush()
