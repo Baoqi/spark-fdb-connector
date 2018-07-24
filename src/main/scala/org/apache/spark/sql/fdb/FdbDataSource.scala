@@ -165,10 +165,10 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
         Optional.empty[DataSourceWriter]()
       } else {
         if (checkSchemaCompatible) {
-          val existingTableStruct = FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).filterNot(_.name == FdbInstance.sysIdColumnName)
-          val toInsertStruct = schema.filterNot(_.name == FdbInstance.sysIdColumnName)
-          if (existingTableStruct != toInsertStruct) {
-            throw new FdbException("Insert Data don't compatible with existing table")
+          val existingTableStruct = StructType(FdbUtil.convertTableDefinitionToStructType(tableDefinitionOpt.get).fields.filterNot(_.name == FdbInstance.sysIdColumnName))
+          val toInsertStruct = StructType(schema.fields.filterNot(_.name == FdbInstance.sysIdColumnName))
+          if (!FdbUtil.checkTwoTableDefinitionContainSameColumns(existingTableStruct, toInsertStruct)) {
+            throw new FdbException(s"Insert Data don't compatible with existing table, existing: ${existingTableStruct.toString}, toInsert: ${toInsertStruct.toString}")
           }
         }
 

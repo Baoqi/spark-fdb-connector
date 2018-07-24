@@ -7,7 +7,7 @@ object FdbUtil {
 
   val StringMapType = new MapType(StringType, StringType, valueContainsNull = false)
 
-  def convertTableDefinitionToStructType(tableDefinition: TableDefinition) = {
+  def convertTableDefinitionToStructType(tableDefinition: TableDefinition): StructType = {
     StructType(tableDefinition.columnNames.zip(tableDefinition.columnTypes).map{ case (colName, colType) =>
       val sparkType = colType match {
         case ColumnDataType.LongType => LongType
@@ -21,5 +21,18 @@ object FdbUtil {
       }
       StructField(name = colName, dataType = sparkType)
     }.toArray)
+  }
+
+  def checkTwoTableDefinitionContainSameColumns(existing: StructType, toInsert: StructType) = {
+    val existingColumns = existing.fields.sortBy{ _.name }
+    val toInsertColumns = toInsert.fields.sortBy{ _.name }
+    if (existingColumns.length != toInsertColumns.length) {
+      false
+    } else {
+      existingColumns.zip(toInsertColumns).forall{
+        case (existingField, toInsertField) =>
+          existingField.name == toInsertField.name && existingField.dataType.acceptsType(toInsertField.dataType)
+      }
+    }
   }
 }
