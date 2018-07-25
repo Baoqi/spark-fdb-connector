@@ -11,6 +11,8 @@ object FdbUtil {
     StructType(tableDefinition.columnNames.zip(tableDefinition.columnTypes).map{ case (colName, colType) =>
       val sparkType = colType match {
         case ColumnDataType.LongType => LongType
+        case ColumnDataType.IntegerType => IntegerType
+        case ColumnDataType.ShortType => ShortType
         case ColumnDataType.DoubleType => DoubleType
         case ColumnDataType.FloatType => FloatType
         case ColumnDataType.StringType => StringType
@@ -23,7 +25,7 @@ object FdbUtil {
     }.toArray)
   }
 
-  def checkTwoTableDefinitionContainSameColumns(existing: StructType, toInsert: StructType) = {
+  def checkTwoTableDefinitionContainSameColumns(existing: StructType, toInsert: StructType): Boolean = {
     val existingColumns = existing.fields.sortBy{ _.name }
     val toInsertColumns = toInsert.fields.sortBy{ _.name }
     if (existingColumns.length != toInsertColumns.length) {
@@ -31,7 +33,13 @@ object FdbUtil {
     } else {
       existingColumns.zip(toInsertColumns).forall{
         case (existingField, toInsertField) =>
-          existingField.name == toInsertField.name && existingField.dataType.acceptsType(toInsertField.dataType)
+          existingField.name == toInsertField.name && existingField.dataType.acceptsType(
+            toInsertField.dataType match {
+                // TODO: currently, only support treat BigDecimal as Double, this may lose precision!
+              case _: DecimalType => DoubleType
+              case t => t
+            }
+          )
       }
     }
   }

@@ -38,6 +38,11 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
   private var keyValueBufferByteSize: Long = 0
 
+  private var accumulateKeyByteSize: Long = 0
+  private var accumulateValueByteSize: Long = 0
+  private var maxKeyByteSize: Long = 0
+  private var maxValueByteSize: Long = 0
+
   private def convertMapToJavaList(map: Map[AnyRef, AnyRef]) = {
     map.withFilter{ case (k, v) =>
       k != null && v != null
@@ -137,16 +142,30 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
 
     keyValueBuffer.append(k -> v)
     keyValueBufferByteSize += k.size + v.size
+
+    accumulateKeyByteSize += k.size
+    accumulateValueByteSize += v.size
+    maxKeyByteSize = math.max(maxKeyByteSize, k.size)
+    maxValueByteSize = math.max(maxValueByteSize, v.size)
   }
 
   def flush(): Unit = {
+    // System.out.println(s"Before flush, the key value size is: $keyValueBufferByteSize ($accumulateKeyByteSize -> $accumulateValueByteSize), and item number: ${keyValueBuffer.size}.  Max Key Value size: ($maxKeyByteSize -> $maxValueByteSize)")
     FdbInstance.fdb.run { tr =>
+      // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5 NOTE: this may break Insertion ACID
+      tr.options().setReadYourWritesDisable()
+      tr.options().setPriorityBatch()
       keyValueBuffer.foreach{ case (k, v) =>
         realAction(tr, k, v)
       }
     }
     keyValueBuffer.clear()
     keyValueBufferByteSize = 0
+
+    accumulateKeyByteSize = 0
+    accumulateValueByteSize = 0
+    maxKeyByteSize = 0
+    maxValueByteSize = 0
   }
 
   /**
@@ -154,10 +173,13 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
     */
 
   def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
+    // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5   NOTE: this may break Insertion ACID
+    //  By not send write key conflict range, we will save some bandwidth, and make the Transaction Byte Size more accurate (otherwise, it may encounter "Transaction exceeds byte limit" error)
+    tr.options().setNextWriteNoWriteConflictRange()
     tr.set(k, v)
   }
 
-  def getBatchByteSize: Double = 0.98 * MAX_TRANSACTION_BYTE_SIZE
+  def getBatchByteSize: Double = 0.5 * MAX_TRANSACTION_BYTE_SIZE
 }
 
 

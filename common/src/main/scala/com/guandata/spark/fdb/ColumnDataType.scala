@@ -7,6 +7,12 @@ object ColumnDataType {
   final case object LongType extends ColumnDataType {
     val value = "LongType"
   }
+  final case object IntegerType extends ColumnDataType {
+    val value = "IntegerType"
+  }
+  final case object ShortType extends ColumnDataType {
+    val value = "ShortType"
+  }
   final case object DoubleType extends ColumnDataType {
     val value = "DoubleType"
   }
@@ -40,6 +46,8 @@ object ColumnDataType {
   def from(value: String) = {
     value match {
       case LongType.value => LongType
+      case IntegerType.value => IntegerType
+      case ShortType.value => ShortType
       case DoubleType.value => DoubleType
       case FloatType.value => FloatType
       case StringType.value => StringType
