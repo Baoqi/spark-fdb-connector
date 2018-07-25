@@ -19,6 +19,10 @@ object FdbBufferedReader {
         java.sql.Date.valueOf(LocalDate.ofEpochDay(v.asInstanceOf[java.lang.Number].longValue()))
       case (v, colType) if colType == ColumnDataType.TimestampType && v != null =>
         java.sql.Timestamp.from(Instant.ofEpochMilli(v.asInstanceOf[java.lang.Number].longValue()))
+      case (v, colType) if colType == ColumnDataType.IntegerType && v != null =>
+        Int.box(v.asInstanceOf[java.lang.Number].intValue())
+      case (v, colType) if colType == ColumnDataType.ShortType && v != null =>
+        Short.box(v.asInstanceOf[java.lang.Number].shortValue())
       case (v, colType) if colType == ColumnDataType.MapType && v != null =>
         v match {
           case elems: java.util.List[AnyRef] =>

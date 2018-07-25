@@ -96,6 +96,14 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
                 case c: Map[AnyRef, AnyRef] =>
                   convertMapToJavaList(c)
               }
+            case ColumnDataType.DoubleType =>
+              cell match {
+                case c: java.math.BigDecimal =>
+                  // TODO: currently, only support treat BigDecimal as Double, this may lose precision!
+                  Double.box(c.doubleValue())
+                case _ =>
+                  cell
+              }
             case _ =>
               cell
           }
