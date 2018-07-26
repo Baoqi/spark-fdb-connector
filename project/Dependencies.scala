@@ -1,7 +1,7 @@
 import sbt._
 
 object Versions {
-  val currentVersion = "0.1.0-SNAPSHOT"
+  val currentVersion = "0.0.1"
 
   val crossScala = Seq("2.11.12", "2.12.6")
 
