@@ -7,6 +7,7 @@ import com.apple.foundationdb.{Database, FDB, KeyValue, Range, Transaction}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
 trait BaseInstance {
   def createOrOpenSubspace(path: List[String]): Subspace
@@ -19,6 +20,7 @@ trait BaseInstance {
 
   def truncateTable(domainId: String, tableName: String): Unit
   def dropTable(domainId: String, tableName: String, metaRange: Range): Unit
+  def flushRows(rows: mutable.ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit
 }
 
 object FdbInstance extends BaseInstance {
@@ -86,6 +88,24 @@ object FdbInstance extends BaseInstance {
     fdb.run{ tr =>
       truncateTableInner(tr, domainId, tableName)
       tr.clear(metaRange)
+    }
+  }
+
+  override def flushRows(rows: ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit = {
+    FdbInstance.fdb.run { tr =>
+      // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5 NOTE: this may break Insertion ACID
+      tr.options().setReadYourWritesDisable()
+      tr.options().setPriorityBatch()
+      rows.foreach{ case (k, v) =>
+        if (isToDelete) {
+          tr.clear(k, Tuple.fromBytes(k).range().end)
+        } else {
+          // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5   NOTE: this may break Insertion ACID
+          //  By not send write key conflict range, we will save some bandwidth, and make the Transaction Byte Size more accurate (otherwise, it may encounter "Transaction exceeds byte limit" error)
+          tr.options().setNextWriteNoWriteConflictRange()
+          tr.set(k, v)
+        }
+      }
     }
   }
 }

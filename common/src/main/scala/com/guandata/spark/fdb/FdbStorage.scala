@@ -6,6 +6,7 @@ import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
+import scala.collection.mutable
 import scala.util.{Failure, Success, Try}
 
 /**
@@ -137,6 +138,7 @@ class FdbStorage(domainId: String) {
   }
 
   def openDataDir(tableName: String): Subspace = instance.openSubspace(List(domainId, tableName))
+  def createOrOpenDataDir(tableName: String): Subspace = instance.createOrOpenSubspace(List(domainId, tableName))
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
     val dataDir = openDataDir(tableName)
@@ -185,5 +187,9 @@ class FdbStorage(domainId: String) {
         locations -> range
       }
     }
+  }
+
+  def flushRows(rows: mutable.ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit = {
+    instance.flushRows(rows, isToDelete)
   }
 }

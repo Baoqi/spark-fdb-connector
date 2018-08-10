@@ -4,19 +4,26 @@ import java.util.Base64
 
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.{ByteArrayUtil, Tuple}
-import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB}
+import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB, WriteBatch, WriteOptions}
 import FdbUtil.using
 import com.apple.foundationdb
 import com.apple.foundationdb.KeyValue
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 
-case class RocksDbWrapper(val db: RocksDB, val dbOptions: DBOptions, val columnFamilyHandle: ColumnFamilyHandle, val iteratorReadOptions: ReadOptions) extends AutoCloseable {
+case class RocksDbWrapper(val db: RocksDB,
+                          val dbOptions: DBOptions,
+                          val columnFamilyHandle: ColumnFamilyHandle,
+                          val iteratorReadOptions: ReadOptions,
+                          val batchWriteOptions: WriteOptions) extends AutoCloseable {
   override def close(): Unit = {
     columnFamilyHandle.close()
     db.close()
     dbOptions.close()
+    iteratorReadOptions.close()
+    batchWriteOptions.close()
   }
 }
 
@@ -104,8 +111,9 @@ object RocksDBInstance extends BaseInstance {
     val columnFamilyHandles =  new java.util.LinkedList[ColumnFamilyHandle]
     val db = RocksDB.open(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
 
-    val iteratorReadOptions: ReadOptions = new ReadOptions().setPrefixSameAsStart(true)
-    new RocksDbWrapper(db, dbOptions, columnFamilyHandles.getFirst, iteratorReadOptions)
+    val iteratorReadOptions = new ReadOptions().setPrefixSameAsStart(true)
+    val batchWriteOptions = new WriteOptions().setDisableWAL(true)
+    new RocksDbWrapper(db, dbOptions, columnFamilyHandles.getFirst, iteratorReadOptions, batchWriteOptions)
   }
 
   override def createTableIfNotExists(checkKey: Array[Byte], writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean = {
@@ -124,11 +132,12 @@ object RocksDBInstance extends BaseInstance {
 
   override def getAllKeyValuesInRange(range: foundationdb.Range): mutable.Buffer[KeyValue] = {
     val result = mutable.ListBuffer.empty[KeyValue]
-    val iter = rocksDBWrapper.db.newIterator(rocksDBWrapper.iteratorReadOptions)
-    iter.seek(range.begin)
-    while (iter.isValid() && ByteArrayUtil.compareUnsigned(iter.key(), range.end) < 0) {
-      result.append(new KeyValue(iter.key(), iter.value()))
-      iter.next()
+    using(rocksDBWrapper.db.newIterator(rocksDBWrapper.iteratorReadOptions)) { iter =>
+      iter.seek(range.begin)
+      while (iter.isValid() && ByteArrayUtil.compareUnsigned(iter.key(), range.end) < 0) {
+        result.append(new KeyValue(iter.key(), iter.value()))
+        iter.next()
+      }
     }
     result
   }
@@ -143,5 +152,18 @@ object RocksDBInstance extends BaseInstance {
     truncateTable(domainId, tableName)
     rocksDBWrapper.db.deleteRange(rocksDBWrapper.columnFamilyHandle, metaRange.begin, metaRange.end)
     removeTableId(List(domainId, tableName))
+  }
+
+  override def flushRows(rows: ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit = {
+    using(new WriteBatch()) { batch =>
+      rows.foreach{ case(k, v) =>
+        if (isToDelete) {
+          batch.deleteRange(rocksDBWrapper.columnFamilyHandle, k, Tuple.fromBytes(k).range().end)
+        } else {
+          batch.put(rocksDBWrapper.columnFamilyHandle, k, v)
+        }
+      }
+      rocksDBWrapper.db.write(rocksDBWrapper.batchWriteOptions, batch)
+    }
   }
 }

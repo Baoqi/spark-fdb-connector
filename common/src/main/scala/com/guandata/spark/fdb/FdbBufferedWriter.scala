@@ -1,7 +1,5 @@
 package com.guandata.spark.fdb
 
-import com.apple.foundationdb.Transaction
-import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
@@ -33,7 +31,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   private val getRowContentFuncCreator = new memorized(tableDefinition, _getRowContentFuncCreator)
 
   private val storage = new FdbStorage(domainId)
-  private val dataDir = DirectoryLayer.getDefault.createOrOpen(FdbInstance.fdb, List(domainId, tableDefinition.tableName).asJava, Array[Byte]()).join()
+  private val dataDir = storage.createOrOpenDataDir(tableDefinition.tableName)
 
   private val keyValueBuffer = mutable.ListBuffer.empty[(Array[Byte], Array[Byte])]
   private var keyValueBufferByteSize: Long = 0
@@ -158,15 +156,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   }
 
   def flush(): Unit = {
-    // System.out.println(s"Before flush, the key value size is: $keyValueBufferByteSize ($accumulateKeyByteSize -> $accumulateValueByteSize), and item number: ${keyValueBuffer.size}.  Max Key Value size: ($maxKeyByteSize -> $maxValueByteSize)")
-    FdbInstance.fdb.run { tr =>
-      // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5 NOTE: this may break Insertion ACID
-      tr.options().setReadYourWritesDisable()
-      tr.options().setPriorityBatch()
-      keyValueBuffer.foreach{ case (k, v) =>
-        realAction(tr, k, v)
-      }
-    }
+    storage.flushRows(keyValueBuffer, isForDelete)
     keyValueBuffer.clear()
     keyValueBufferByteSize = 0
 
@@ -179,22 +169,14 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
   /**
     * The following are to be overrided
     */
-
-  def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
-    // https://forums.foundationdb.org/t/best-practices-for-bulk-load/422/5   NOTE: this may break Insertion ACID
-    //  By not send write key conflict range, we will save some bandwidth, and make the Transaction Byte Size more accurate (otherwise, it may encounter "Transaction exceeds byte limit" error)
-    tr.options().setNextWriteNoWriteConflictRange()
-    tr.set(k, v)
-  }
+  def isForDelete: Boolean = false
 
   def getBatchByteSize: Double = 0.5 * MAX_TRANSACTION_BYTE_SIZE
 }
 
 
 class FdbBufferedDeleter(domainId: String, tableDefinition: TableDefinition) extends FdbBufferedWriter(domainId, tableDefinition, enableMerge = false) {
-  override def realAction(tr: Transaction, k: Array[Byte], v: Array[Byte]): Unit = {
-    tr.clear(k, Tuple.fromBytes(k).range().end)
-  }
+  override def isForDelete: Boolean = true
 
   override def getBatchByteSize: Double = 0.01 * MAX_TRANSACTION_BYTE_SIZE
 }
