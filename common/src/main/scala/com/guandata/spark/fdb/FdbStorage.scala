@@ -1,8 +1,7 @@
 package com.guandata.spark.fdb
 
 import com.apple.foundationdb.async.AsyncUtil
-import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
-import com.apple.foundationdb.directory.DirectoryLayer
+import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode}
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.Tuple
 
@@ -95,24 +94,14 @@ class FdbStorage(domainId: String) {
 
   def truncateTable(tableName: String): Try[Boolean] = {
     getTableDefinition(tableName).map{ _ =>
-      /*fdb.run{ tr =>
-        truncateTableInner(tr, tableName)
-      }*/
+      instance.truncateTable(domainId, tableName)
       true
     }
   }
 
-  private def truncateTableInner(tr: Transaction, tableName: String): Unit = {
-    val dataDir = DirectoryLayer.getDefault.createOrOpen(tr, List(domainId, tableName).asJava, Array[Byte]()).join()
-    tr.clear(dataDir.range(Tuple.from()))
-  }
-
   def dropTable(tableName: String): Try[Boolean] = {
     getTableDefinition(tableName).map{ _ =>
-      /*fdb.run{ tr =>
-        truncateTableInner(tr, tableName)
-        tr.clear(metaDir.range(Tuple.from(tableName)))
-      }*/
+      instance.dropTable(domainId, tableName, metaDir.range(Tuple.from(tableName)))
       true
     }
   }

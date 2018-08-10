@@ -2,6 +2,7 @@ package com.guandata.spark.fdb
 
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.subspace.Subspace
+import com.apple.foundationdb.tuple.Tuple
 import com.apple.foundationdb.{Database, FDB, KeyValue, Range, Transaction}
 
 import scala.collection.JavaConverters._
@@ -15,6 +16,9 @@ trait BaseInstance {
                              writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean
 
   def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue]
+
+  def truncateTable(domainId: String, tableName: String): Unit
+  def dropTable(domainId: String, tableName: String, metaRange: Range): Unit
 }
 
 object FdbInstance extends BaseInstance {
@@ -64,6 +68,24 @@ object FdbInstance extends BaseInstance {
   override def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(range).asList().join().asScala
+    }
+  }
+
+  private def truncateTableInner(tr: Transaction, domainId: String, tableName: String): Unit = {
+    val dataDir = DirectoryLayer.getDefault.createOrOpen(tr, List(domainId, tableName).asJava, Array[Byte]()).join()
+    tr.clear(dataDir.range(Tuple.from()))
+  }
+
+  override def truncateTable(domainId: String, tableName: String): Unit = {
+    fdb.run{ tr =>
+      truncateTableInner(tr, domainId, tableName)
+    }
+  }
+
+  override def dropTable(domainId: String, tableName: String, metaRange: Range): Unit = {
+    fdb.run{ tr =>
+      truncateTableInner(tr, domainId, tableName)
+      tr.clear(metaRange)
     }
   }
 }

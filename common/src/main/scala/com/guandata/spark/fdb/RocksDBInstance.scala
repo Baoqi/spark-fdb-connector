@@ -73,6 +73,17 @@ object RocksDBInstance extends BaseInstance {
     }
   }
 
+  private def removeTableId(path: List[String]) = {
+    val pathKey = getPathMapKey(path)
+    this.synchronized{
+      dirPathToPrefixMap.get(pathKey) match {
+        case Some(id) =>
+          rocksDBWrapper.db.delete(rootSchemaDir.pack(Tuple.from(path: _*)))
+        case _ =>
+      }
+    }
+  }
+
   override def createOrOpenSubspace(path: List[String]): Subspace = {
     val tableId = createOrGetTableId(path)
     new Subspace(Tuple.from(Long.box(tableId)))
@@ -120,5 +131,17 @@ object RocksDBInstance extends BaseInstance {
       iter.next()
     }
     result
+  }
+
+  override def truncateTable(domainId: String, tableName: String): Unit = {
+    val dataDir = createOrOpenSubspace(List(domainId, tableName))
+    val range = dataDir.range(Tuple.from())
+    rocksDBWrapper.db.deleteRange(rocksDBWrapper.columnFamilyHandle, range.begin, range.end)
+  }
+
+  override def dropTable(domainId: String, tableName: String, metaRange: foundationdb.Range): Unit = {
+    truncateTable(domainId, tableName)
+    rocksDBWrapper.db.deleteRange(rocksDBWrapper.columnFamilyHandle, metaRange.begin, metaRange.end)
+    removeTableId(List(domainId, tableName))
   }
 }
