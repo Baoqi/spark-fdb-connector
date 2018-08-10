@@ -1,10 +1,23 @@
 package com.guandata.spark.fdb
 
-import java.util.UUID
+import com.apple.foundationdb.directory.DirectoryLayer
+import com.apple.foundationdb.subspace.Subspace
+import com.apple.foundationdb.{Database, FDB, KeyValue, Range, Transaction}
 
-import com.apple.foundationdb.{Database, FDB, Transaction}
+import scala.collection.JavaConverters._
+import scala.collection.mutable
 
-object FdbInstance {
+trait BaseInstance {
+  def createOrOpenSubspace(path: List[String]): Subspace
+  def openSubspace(path: List[String]): Subspace
+
+  def createTableIfNotExists(checkKey: Array[Byte],
+                             writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean
+
+  def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue]
+}
+
+object FdbInstance extends BaseInstance {
   lazy val fdb: Database = {
     val instance = if (!FDB.isAPIVersionSelected) {
       FDB.selectAPIVersion(520)
@@ -25,18 +38,32 @@ object FdbInstance {
     result
   }
 
-  def convertUUIDCompactStringToUUID(str: String): UUID = {
-    val shortUUIDCharArray = str.toCharArray
-    UUID.fromString(new StringBuilder(38)
-      .append(shortUUIDCharArray.subSequence(0, 8))
-      .append('-')
-      .append(shortUUIDCharArray.subSequence(8, 12))
-      .append('-')
-      .append(shortUUIDCharArray.subSequence(12, 16))
-      .append('-')
-      .append(shortUUIDCharArray.subSequence(16, 20))
-      .append('-')
-      .append(shortUUIDCharArray.subSequence(20, 32))
-      .toString())
+  override def createOrOpenSubspace(path: List[String]): Subspace = {
+    DirectoryLayer.getDefault.createOrOpen(fdb, path.asJava, Array[Byte]()).join()
+  }
+
+  def openSubspace(path: List[String]): Subspace = {
+    DirectoryLayer.getDefault.open(fdb, path.asJava, Array[Byte]()).join()
+  }
+
+  override def createTableIfNotExists(checkKey: Array[Byte],
+                                      writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean = {
+    FdbInstance.wrapDbFunction{ tr =>
+      val existingTableRecord = tr.get(checkKey).join()
+      if (existingTableRecord != null) {
+        false
+      } else {
+        writeValueIfNotExists.foreach{ case(k, v) =>
+          tr.set(k, v)
+        }
+        true
+      }
+    }
+  }
+
+  override def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue] = {
+    FdbInstance.wrapDbFunction { tr =>
+      tr.getRange(range).asList().join().asScala
+    }
   }
 }

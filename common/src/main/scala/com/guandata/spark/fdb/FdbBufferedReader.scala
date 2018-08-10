@@ -2,7 +2,7 @@ package com.guandata.spark.fdb
 
 import java.time.{Instant, LocalDate}
 
-import com.apple.foundationdb.directory.DirectorySubspace
+import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.Tuple
 import com.apple.foundationdb.{KeySelector, KeyValue, Range}
 
@@ -11,7 +11,7 @@ import scala.collection.JavaConverters._
 object FdbBufferedReader {
   val BATCH_ROW_COUNT: Int = 90    //  key max size: 10,000, value max size 100,000,  transaction max size: 10,000,000 bytes, so, 10000000/110000 = 90.9
 
-  def unpackKeyValue(dataDir: DirectorySubspace, tableDefinition: TableDefinition, kv: KeyValue): Vector[AnyRef] = {
+  def unpackKeyValue(dataDir: Subspace, tableDefinition: TableDefinition, kv: KeyValue): Vector[AnyRef] = {
     (dataDir.unpack(kv.getKey).getItems.asScala ++ Tuple.fromBytes(kv.getValue).getItems.asScala.drop(1)).zip(
       tableDefinition.columnTypes
     ).map{

@@ -86,7 +86,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
               }
             case ColumnDataType.UUIDType =>
               cell match {
-                case c: java.lang.String => FdbInstance.convertUUIDCompactStringToUUID(c)
+                case c: java.lang.String => FdbUtil.convertUUIDCompactStringToUUID(c)
                 case _ => cell
               }
             case ColumnDataType.MapType =>

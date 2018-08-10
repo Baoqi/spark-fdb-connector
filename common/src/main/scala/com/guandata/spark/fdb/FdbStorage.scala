@@ -2,7 +2,8 @@ package com.guandata.spark.fdb
 
 import com.apple.foundationdb.async.AsyncUtil
 import com.apple.foundationdb.{KeySelector, KeyValue, LocalityUtil, Range, StreamingMode, Transaction}
-import com.apple.foundationdb.directory.{DirectoryLayer, DirectorySubspace}
+import com.apple.foundationdb.directory.DirectoryLayer
+import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.Tuple
 
 import scala.collection.JavaConverters._
@@ -14,8 +15,9 @@ import scala.util.{Failure, Success, Try}
   * @param domainId multi-tenants support, if you don't need to support multi-tenants, just pass in a Hard Code value, like "warehouse"
   */
 class FdbStorage(domainId: String) {
-  private val fdb = FdbInstance.fdb
-  private val metaDir = DirectoryLayer.getDefault.createOrOpen(fdb, List(domainId, FdbInstance.sysTableMetaColumnName).asJava, Array[Byte]()).join()
+  // private val fdb = FdbInstance.fdb
+  private val instance: BaseInstance = RocksDBInstance
+  private val metaDir = instance.createOrOpenSubspace(List(domainId, FdbInstance.sysTableMetaColumnName))
 
   /**
     * Main API to create logic table in FDB
@@ -43,17 +45,14 @@ class FdbStorage(domainId: String) {
       )
     }
 
-    val created = FdbInstance.wrapDbFunction{ tr =>
-      val existingTableRecord = tr.get(metaDir.pack(Tuple.from(tableName, "name"))).join()
-      if (existingTableRecord != null) {
-        false
-      } else {
-        tr.set(metaDir.pack(Tuple.from(tableName, "name")), Tuple.from(checkedColumnNameTypes.map{ _._1 }: _*).pack())
-        tr.set(metaDir.pack(Tuple.from(tableName, "type")), Tuple.from(checkedColumnNameTypes.map{ _._2.value }: _*).pack())
-        tr.set(metaDir.pack(Tuple.from(tableName, "pk")), Tuple.from(checkedPrimaryKeys: _*).pack())
-        true
-      }
-    }
+    val created = instance.createTableIfNotExists(
+      metaDir.pack(Tuple.from(tableName, "name")),
+      List(
+        metaDir.pack(Tuple.from(tableName, "name")) -> Tuple.from(checkedColumnNameTypes.map{ _._1 }: _*).pack(),
+        metaDir.pack(Tuple.from(tableName, "type")) -> Tuple.from(checkedColumnNameTypes.map{ _._2.value }: _*).pack(),
+        metaDir.pack(Tuple.from(tableName, "pk")) -> Tuple.from(checkedPrimaryKeys: _*).pack()
+      )
+    )
 
     if (!created) {
       Failure(new FdbException(s"Table $tableName already exists in domain: $domainId"))
@@ -68,39 +67,37 @@ class FdbStorage(domainId: String) {
   }
 
   def getTableDefinition(tableName: String): Try[TableDefinition] = {
-    FdbInstance.wrapDbFunction{ tr =>
-      val rangeResult = tr.getRange(metaDir.range(Tuple.from(tableName))).asList().join().asScala
-      if (rangeResult.isEmpty) {
-        Failure(new FdbException(s"Table $tableName not found in domain: $domainId"))
-      } else {
-        var names = List.empty[String]
-        var types = List.empty[String]
-        var primaryKeys = List.empty[String]
-        rangeResult.foreach{ kv =>
-          metaDir.unpack(kv.getKey).getString(1) match {
-            case "name" =>
-              names = getValueAsStringList(kv.getValue)
-            case "type" =>
-              types = getValueAsStringList(kv.getValue)
-            case "pk" =>
-              primaryKeys = getValueAsStringList(kv.getValue)
-          }
+    val rangeResult = instance.getAllKeyValuesInRange(metaDir.range(Tuple.from(tableName)))
+    if (rangeResult.isEmpty) {
+      Failure(new FdbException(s"Table $tableName not found in domain: $domainId"))
+    } else {
+      var names = List.empty[String]
+      var types = List.empty[String]
+      var primaryKeys = List.empty[String]
+      rangeResult.foreach{ kv =>
+        metaDir.unpack(kv.getKey).getString(1) match {
+          case "name" =>
+            names = getValueAsStringList(kv.getValue)
+          case "type" =>
+            types = getValueAsStringList(kv.getValue)
+          case "pk" =>
+            primaryKeys = getValueAsStringList(kv.getValue)
         }
-        Success(TableDefinition(
-          tableName = tableName,
-          columnNames = names,
-          columnTypes = types.map{ ColumnDataType.from },
-          primaryKeys = primaryKeys
-        ))
       }
+      Success(TableDefinition(
+        tableName = tableName,
+        columnNames = names,
+        columnTypes = types.map{ ColumnDataType.from },
+        primaryKeys = primaryKeys
+      ))
     }
   }
 
   def truncateTable(tableName: String): Try[Boolean] = {
     getTableDefinition(tableName).map{ _ =>
-      fdb.run{ tr =>
+      /*fdb.run{ tr =>
         truncateTableInner(tr, tableName)
-      }
+      }*/
       true
     }
   }
@@ -112,10 +109,10 @@ class FdbStorage(domainId: String) {
 
   def dropTable(tableName: String): Try[Boolean] = {
     getTableDefinition(tableName).map{ _ =>
-      fdb.run{ tr =>
+      /*fdb.run{ tr =>
         truncateTableInner(tr, tableName)
         tr.clear(metaDir.range(Tuple.from(tableName)))
-      }
+      }*/
       true
     }
   }
@@ -150,7 +147,7 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  def openDataDir(tableName: String): DirectorySubspace = DirectoryLayer.getDefault.open(fdb, List(domainId, tableName).asJava, Array[Byte]()).join()
+  def openDataDir(tableName: String): Subspace = instance.openSubspace(List(domainId, tableName))
 
   def preview(tableName: String, limit: Int): Seq[Seq[AnyRef]] = {
     val dataDir = openDataDir(tableName)

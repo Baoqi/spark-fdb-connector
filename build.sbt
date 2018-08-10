@@ -17,6 +17,7 @@ lazy val fdbCommon = (project in file("common")).
     name := "fdb-common",
     libraryDependencies ++= Seq(
       fdbClientDep,
+      rocksDbDep,
       scalaTest % Test
     )
   )
