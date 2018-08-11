@@ -130,17 +130,25 @@ object RocksDBInstance extends BaseInstance {
     }
   }
 
-  override def getAllKeyValuesInRange(range: foundationdb.Range): mutable.Buffer[KeyValue] = {
+  override def getAllKeyValuesInRange(range: foundationdb.Range): Vector[KeyValue] = {
+    rangeQueryAsVector(range.begin, range.end, Int.MaxValue)
+  }
+
+
+  override def rangeQueryAsVector(rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
     val result = mutable.ListBuffer.empty[KeyValue]
+    var currentCount: Long = 0
     using(rocksDBWrapper.db.newIterator(rocksDBWrapper.iteratorReadOptions)) { iter =>
-      iter.seek(range.begin)
-      while (iter.isValid() && ByteArrayUtil.compareUnsigned(iter.key(), range.end) < 0) {
+      iter.seek(rangeBegin)
+      while (iter.isValid() && currentCount < limit && ByteArrayUtil.compareUnsigned(iter.key(), rangeEnd) < 0) {
         result.append(new KeyValue(iter.key(), iter.value()))
+        currentCount = currentCount + 1
         iter.next()
       }
     }
-    result
+    result.toVector
   }
+
 
   override def truncateTable(domainId: String, tableName: String): Unit = {
     val dataDir = createOrOpenSubspace(List(domainId, tableName))

@@ -149,9 +149,7 @@ class FdbStorage(domainId: String) {
   }
 
   def rangeQueryAsVector(rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
-    FdbInstance.wrapDbFunction { tr =>
-      tr.getRange(rangeBegin, rangeEnd, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
-    }
+    instance.rangeQueryAsVector(rangeBegin, rangeEnd, limit)
   }
 
   def rangeQueryAsVector(beginKeySelector: KeySelector, endKeySelector: KeySelector, limit: Int): Vector[KeyValue] = {

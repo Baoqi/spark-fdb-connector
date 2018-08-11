@@ -3,7 +3,7 @@ package com.guandata.spark.fdb
 import com.apple.foundationdb.directory.DirectoryLayer
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.Tuple
-import com.apple.foundationdb.{Database, FDB, KeyValue, Range, Transaction}
+import com.apple.foundationdb.{Database, FDB, KeyValue, Range, StreamingMode, Transaction}
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable
@@ -16,7 +16,8 @@ trait BaseInstance {
   def createTableIfNotExists(checkKey: Array[Byte],
                              writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean
 
-  def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue]
+  def getAllKeyValuesInRange(range: Range): Vector[KeyValue]
+  def rangeQueryAsVector(rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue]
 
   def truncateTable(domainId: String, tableName: String): Unit
   def dropTable(domainId: String, tableName: String, metaRange: Range): Unit
@@ -67,9 +68,9 @@ object FdbInstance extends BaseInstance {
     }
   }
 
-  override def getAllKeyValuesInRange(range: Range): mutable.Buffer[KeyValue] = {
+  override def getAllKeyValuesInRange(range: Range): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
-      tr.getRange(range).asList().join().asScala
+      tr.getRange(range).asList().join().asScala.toVector
     }
   }
 
@@ -106,6 +107,12 @@ object FdbInstance extends BaseInstance {
           tr.set(k, v)
         }
       }
+    }
+  }
+
+  override def rangeQueryAsVector(rangeBegin: Array[Byte], rangeEnd: Array[Byte], limit: Int): Vector[KeyValue] = {
+    FdbInstance.wrapDbFunction { tr =>
+      tr.getRange(rangeBegin, rangeEnd, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
     }
   }
 }
