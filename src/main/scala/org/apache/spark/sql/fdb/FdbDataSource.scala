@@ -3,7 +3,7 @@ package org.apache.spark.sql.fdb
 import java.util.{Optional, UUID}
 
 import com.apple.foundationdb.Range
-import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, FdbBufferedReader, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage}
+import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, BaseBufferedReader, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage}
 import org.apache.spark.sql.{Row, RowFactory, SaveMode}
 import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
 import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
@@ -13,7 +13,7 @@ import org.apache.spark.sql.types.StructType
 import scala.collection.JavaConverters._
 
 
-class FdbDataReader(reader: FdbBufferedReader) extends DataReader[Row] {
+class FdbDataReader(reader: BaseBufferedReader) extends DataReader[Row] {
   override def next(): Boolean = reader.next()
 
   override def get(): Row = {
@@ -27,7 +27,9 @@ class FdbDataReader(reader: FdbBufferedReader) extends DataReader[Row] {
     RowFactory.create(cellValues: _*)
   }
 
-  override def close(): Unit = ()
+  override def close(): Unit = {
+    reader.close()
+  }
 }
 
 
@@ -39,7 +41,7 @@ class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[S
   override def createDataReader(): DataReader[Row] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
-    new FdbDataReader(new FdbBufferedReader(tableDefinition, storage, new Range(begin, end)))
+    new FdbDataReader(BaseBufferedReader.createBufferedReader(tableDefinition, storage, new Range(begin, end)))
   }
 }
 
@@ -51,14 +53,25 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
   }
 
   override def createDataReaderFactories(): java.util.List[DataReaderFactory[Row]] = {
-    val localityInfos = storage.getLocalityInfo(tableName)
-    localityInfos.map{ case (locations, range) =>
-      new FdbDataReaderFactory(domainId = domainId,
+    if (storage.isRocksDB) {
+      // we don't support read localityInfo for RocksDB currently
+      val range = storage.openDataDir(tableName).range()
+      List(new FdbDataReaderFactory(domainId = domainId,
         tableName = tableName,
-        locations = locations,
+        locations = Seq.empty[String],
         begin = range.begin,
         end = range.end).asInstanceOf[DataReaderFactory[Row]]
-    }.asJava
+      ).asJava
+    } else {
+      val localityInfos = storage.getLocalityInfo(tableName)
+      localityInfos.map { case (locations, range) =>
+        new FdbDataReaderFactory(domainId = domainId,
+          tableName = tableName,
+          locations = locations,
+          begin = range.begin,
+          end = range.end).asInstanceOf[DataReaderFactory[Row]]
+      }.asJava
+    }
   }
 }
 

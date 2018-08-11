@@ -3,12 +3,12 @@ package com.guandata.spark.fdb
 import java.time.{Instant, LocalDate}
 
 import com.apple.foundationdb.subspace.Subspace
-import com.apple.foundationdb.tuple.Tuple
+import com.apple.foundationdb.tuple.{ByteArrayUtil, Tuple}
 import com.apple.foundationdb.{KeySelector, KeyValue, Range}
 
 import scala.collection.JavaConverters._
 
-object FdbBufferedReader {
+object BaseBufferedReader {
   val BATCH_ROW_COUNT: Int = 90    //  key max size: 10,000, value max size 100,000,  transaction max size: 10,000,000 bytes, so, 10000000/110000 = 90.9
 
   def unpackKeyValue(dataDir: Subspace, tableDefinition: TableDefinition, kv: KeyValue): Vector[AnyRef] = {
@@ -38,32 +38,76 @@ object FdbBufferedReader {
         v
     }.toVector
   }
+
+  def createBufferedReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range): BaseBufferedReader = {
+    if (storage.isRocksDB) {
+      new RocksDBBufferedReader(tableDefinition, storage, keyRange)
+    } else {
+      new FdbBufferedReader(tableDefinition, storage, keyRange)
+    }
+  }
 }
 
-class FdbBufferedReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range) {
+trait BaseBufferedReader {
+  def next(): Boolean
+  def get(): Vector[AnyRef]
+  def close(): Unit
+}
 
-  private var batchItems = storage.rangeQueryAsVector(keyRange.begin, keyRange.end, FdbBufferedReader.BATCH_ROW_COUNT)
+class FdbBufferedReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range) extends BaseBufferedReader {
+
+  private var batchItems = storage.rangeQueryAsVector(keyRange.begin, keyRange.end, BaseBufferedReader.BATCH_ROW_COUNT)
   private var currentBatchIndex = -1
   private val endKeySelector = KeySelector.firstGreaterOrEqual(keyRange.end)
   private val dataDir = storage.openDataDir(tableDefinition.tableName)
 
-  def next(): Boolean = {
+  override def next(): Boolean = {
     currentBatchIndex += 1
     if (currentBatchIndex < batchItems.size) {
       true
-    } else if (batchItems.size < FdbBufferedReader.BATCH_ROW_COUNT) {
+    } else if (batchItems.size < BaseBufferedReader.BATCH_ROW_COUNT) {
       false
     } else {
       // still need to fetch more
       val newBatchBeginKeySelector = KeySelector.firstGreaterThan(batchItems.last.getKey)
-      batchItems = storage.rangeQueryAsVector(newBatchBeginKeySelector, endKeySelector, FdbBufferedReader.BATCH_ROW_COUNT)
+      batchItems = storage.rangeQueryAsVector(newBatchBeginKeySelector, endKeySelector, BaseBufferedReader.BATCH_ROW_COUNT)
       currentBatchIndex = 0
       batchItems.nonEmpty
     }
   }
 
-  def get(): Vector[AnyRef] = {
+  override def get(): Vector[AnyRef] = {
     val kv = batchItems(currentBatchIndex)
-    FdbBufferedReader.unpackKeyValue(dataDir, tableDefinition, kv)
+    BaseBufferedReader.unpackKeyValue(dataDir, tableDefinition, kv)
+  }
+
+  override def close(): Unit = {
+
+  }
+}
+
+class RocksDBBufferedReader(tableDefinition: TableDefinition, storage: FdbStorage, keyRange: Range) extends BaseBufferedReader {
+  private val dataDir = storage.openDataDir(tableDefinition.tableName)
+  private val iter = storage.openRocksDBIterator()
+  private var seeked = false
+
+  override def next(): Boolean = {
+    if (seeked) {
+      iter.next()
+    } else {
+      iter.seek(keyRange.begin)
+      seeked = true
+    }
+
+    iter.isValid && ByteArrayUtil.compareUnsigned(iter.key(), keyRange.end) < 0
+  }
+
+  override def get(): Vector[AnyRef] = {
+    val kv = new KeyValue(iter.key(), iter.value())
+    BaseBufferedReader.unpackKeyValue(dataDir, tableDefinition, kv)
+  }
+
+  override def close(): Unit = {
+    iter.close()
   }
 }

@@ -135,7 +135,7 @@ class FdbBufferedWriter(domainId: String, tableDefinition: TableDefinition, enab
     val k = dataDir.pack(keyTuple)
     var valueItems = rawValueItems
     if (enableMerge) {
-      val foundRows = storage.rangeQueryAsVector(k, dataDir.range(keyTuple).end, FdbBufferedReader.BATCH_ROW_COUNT)
+      val foundRows = storage.rangeQueryAsVector(k, dataDir.range(keyTuple).end, BaseBufferedReader.BATCH_ROW_COUNT)
       if (foundRows.nonEmpty) {
         val existingCellValues = Tuple.fromBytes(foundRows.head.getValue).getItems.asScala.drop(1).toVector
         valueItems = mergeRow(rawNewRow = rawValueItems, rawOldRow = existingCellValues)

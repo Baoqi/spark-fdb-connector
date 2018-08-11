@@ -29,7 +29,8 @@ case class RocksDbWrapper(val db: RocksDB,
 
 object RocksDBInstance extends BaseInstance {
 
-  var rocksDBWrapper: RocksDbWrapper = _
+  var rocksDBWrapper: RocksDbWrapper = null
+
   def init(providedRocksDB: RocksDbWrapper): Unit = {
     rocksDBWrapper = providedRocksDB
     // load tables with ID

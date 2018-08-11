@@ -16,8 +16,14 @@ import scala.util.{Failure, Success, Try}
   */
 class FdbStorage(domainId: String) {
   // private val fdb = FdbInstance.fdb
-  private val instance: BaseInstance = RocksDBInstance
+  private val instance: BaseInstance = if (RocksDBInstance.rocksDBWrapper == null) {
+    FdbInstance
+  } else {
+    RocksDBInstance
+  }
   private val metaDir = instance.createOrOpenSubspace(List(domainId, FdbInstance.sysTableMetaColumnName))
+
+  def isRocksDB = instance == RocksDBInstance
 
   /**
     * Main API to create logic table in FDB
@@ -152,6 +158,22 @@ class FdbStorage(domainId: String) {
     instance.rangeQueryAsVector(rangeBegin, rangeEnd, limit)
   }
 
+  def flushRows(rows: mutable.ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit = {
+    instance.flushRows(rows, isToDelete)
+  }
+
+  /**
+    * The following is only for RocksDB instance
+    */
+
+  def openRocksDBIterator() = {
+    val wrapper = RocksDBInstance.rocksDBWrapper
+    wrapper.db.newIterator(wrapper.columnFamilyHandle, wrapper.iteratorReadOptions)
+  }
+
+  /**
+    * The following is only for FoundataionDB instance
+    */
   def rangeQueryAsVector(beginKeySelector: KeySelector, endKeySelector: KeySelector, limit: Int): Vector[KeyValue] = {
     FdbInstance.wrapDbFunction { tr =>
       tr.getRange(beginKeySelector, endKeySelector, limit, false, StreamingMode.EXACT).asList().join().asScala.toVector
@@ -187,7 +209,4 @@ class FdbStorage(domainId: String) {
     }
   }
 
-  def flushRows(rows: mutable.ListBuffer[(Array[Byte], Array[Byte])], isToDelete: Boolean): Unit = {
-    instance.flushRows(rows, isToDelete)
-  }
 }
