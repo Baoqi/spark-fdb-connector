@@ -1,10 +1,8 @@
 package com.guandata.spark.fdb
 
-import java.util.Base64
-
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.{ByteArrayUtil, Tuple}
-import org.rocksdb.{ColumnFamilyDescriptor, ColumnFamilyHandle, ColumnFamilyOptions, DBOptions, ReadOptions, RocksDB, WriteBatch, WriteOptions}
+import org.rocksdb.WriteBatch
 import FdbUtil.using
 import com.apple.foundationdb
 import com.apple.foundationdb.KeyValue
@@ -12,20 +10,6 @@ import com.apple.foundationdb.KeyValue
 import scala.collection.JavaConverters._
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
-
-case class RocksDbWrapper(val db: RocksDB,
-                          val dbOptions: DBOptions,
-                          val columnFamilyHandle: ColumnFamilyHandle,
-                          val iteratorReadOptions: ReadOptions,
-                          val batchWriteOptions: WriteOptions) extends AutoCloseable {
-  override def close(): Unit = {
-    columnFamilyHandle.close()
-    db.close()
-    dbOptions.close()
-    iteratorReadOptions.close()
-    batchWriteOptions.close()
-  }
-}
 
 object RocksDBInstance extends BaseInstance {
 
@@ -55,7 +39,7 @@ object RocksDBInstance extends BaseInstance {
   val rootSchemaDir = new Subspace(Tuple.from(Long.box(256)))
 
   private def getPathMapKey(path: List[String]) = {
-    Base64.getEncoder.encodeToString(Tuple.from(path: _*).pack())
+    ByteArrayUtil.printable(Tuple.from(path: _*).pack())
   }
 
   private def createOrGetTableId(path: List[String]): Long = {
@@ -98,23 +82,14 @@ object RocksDBInstance extends BaseInstance {
   }
 
   override def openSubspace(path: List[String]): Subspace = {
+    createOrOpenSubspace(path)
+    /*
     this.synchronized{
       val pathKey = getPathMapKey(path)
       val tableId = dirPathToPrefixMap(pathKey)
       new Subspace(Tuple.from(Long.box(tableId)))
     }
-  }
-
-  def openRockDbWrapper(path: String): RocksDbWrapper = {
-    val dbOptions = new DBOptions().setCreateIfMissing(true)
-    val columnFamilyOptions = new ColumnFamilyOptions().useFixedLengthPrefixExtractor(3)
-    val columnFamilyDescriptors = List( new ColumnFamilyDescriptor("default".getBytes("UTF-8"), columnFamilyOptions)).asJava
-    val columnFamilyHandles =  new java.util.LinkedList[ColumnFamilyHandle]
-    val db = RocksDB.open(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
-
-    val iteratorReadOptions = new ReadOptions().setPrefixSameAsStart(true)
-    val batchWriteOptions = new WriteOptions().setDisableWAL(true)
-    new RocksDbWrapper(db, dbOptions, columnFamilyHandles.getFirst, iteratorReadOptions, batchWriteOptions)
+    */
   }
 
   override def createTableIfNotExists(checkKey: Array[Byte], writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean = {
