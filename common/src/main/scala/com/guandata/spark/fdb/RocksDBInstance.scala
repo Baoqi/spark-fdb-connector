@@ -1,5 +1,7 @@
 package com.guandata.spark.fdb
 
+import java.util.concurrent.ConcurrentHashMap
+
 import com.apple.foundationdb.subspace.Subspace
 import com.apple.foundationdb.tuple.{ByteArrayUtil, Tuple}
 import org.rocksdb.WriteBatch
@@ -14,28 +16,27 @@ import scala.collection.mutable.ListBuffer
 object RocksDBInstance extends BaseInstance {
 
   var rocksDBWrapper: RocksDbWrapper = null
+  var dirPathToPrefixMap: ConcurrentHashMap[String, java.lang.Long] = null
 
-  def init(providedRocksDB: RocksDbWrapper): Unit = {
+  def init(providedRocksDB: RocksDbWrapper, providedMap: ConcurrentHashMap[String, java.lang.Long]): Unit = {
     rocksDBWrapper = providedRocksDB
+    dirPathToPrefixMap = providedMap
+
     // load tables with ID
-    this.synchronized {
-      val targetMap = mutable.HashMap.empty[String, Long]
+    dirPathToPrefixMap.synchronized {
       using(rocksDBWrapper.db.newIterator(rocksDBWrapper.iteratorReadOptions)) { iter =>
         val range = rootSchemaDir.range()
         iter.seek(range.begin)
         while (iter.isValid()) {
           val path = rootSchemaDir.unpack(iter.key()).getItems.asScala.map{_.asInstanceOf[String]}.toList
           val tableId = Tuple.fromBytes(iter.value()).getLong(0)
-          targetMap.put(getPathMapKey(path), tableId)
+          dirPathToPrefixMap.putIfAbsent(getPathMapKey(path), tableId)
           iter.next()
         }
-        dirPathToPrefixMap = targetMap.toMap
       }
     }
-    System.out.println("Loadded RocksDB directory structure: " + dirPathToPrefixMap.toString)
   }
 
-  var dirPathToPrefixMap = Map.empty[String, Long]
   val rootSchemaDir = new Subspace(Tuple.from(Long.box(256)))
 
   private def getPathMapKey(path: List[String]) = {
@@ -44,34 +45,36 @@ object RocksDBInstance extends BaseInstance {
 
   private def createOrGetTableId(path: List[String]): Long = {
     val pathKey = getPathMapKey(path)
-    this.synchronized{
-      dirPathToPrefixMap.get(pathKey) match {
-        case Some(id) => id
-        case _ =>
-          val idSet = dirPathToPrefixMap.values.toSet
-          val maxId = if (idSet.nonEmpty) idSet.max else 256  // 256 is reserved for root schemaDir
+    if (dirPathToPrefixMap.containsKey(pathKey)) {
+      dirPathToPrefixMap.get(pathKey)
+    } else {
+      dirPathToPrefixMap.synchronized{
+        val idSet = dirPathToPrefixMap.values().asScala.toSet
+        val maxId = if (idSet.nonEmpty) idSet.max else Long.box(256)  // 256 is reserved for root schemaDir
 
-          val targetId = if (Tuple.from(Long.box(maxId)).pack().size != 3) {
-            // Can only create table if if size == 3
-            Stream.from(257).filter(d => !idSet.contains(d)).head
-          } else {
-            maxId + 1
-          }
+        val targetId = if (Tuple.from(maxId).pack().size != 3) {
+          // Can only create table if if size == 3
+          Stream.from(257).filter(d => !idSet.contains(Long.box(d))).head
+        } else {
+          maxId + 1
+        }
 
-          dirPathToPrefixMap = dirPathToPrefixMap + (pathKey -> targetId)
-          rocksDBWrapper.db.put(rootSchemaDir.pack(Tuple.from(path: _*)), Tuple.from(Long.box(targetId)).pack())
-          targetId
+        dirPathToPrefixMap.putIfAbsent(pathKey, targetId)
+
+        val readOutId = dirPathToPrefixMap.get(pathKey)
+        rocksDBWrapper.db.put(rootSchemaDir.pack(Tuple.from(path: _*)), Tuple.from(readOutId).pack())
+        readOutId
       }
     }
   }
 
   private def removeTableId(path: List[String]) = {
     val pathKey = getPathMapKey(path)
-    this.synchronized{
-      dirPathToPrefixMap.get(pathKey) match {
-        case Some(id) =>
-          rocksDBWrapper.db.delete(rootSchemaDir.pack(Tuple.from(path: _*)))
-        case _ =>
+    dirPathToPrefixMap.synchronized{
+      if (dirPathToPrefixMap.containsKey(pathKey)) {
+        rocksDBWrapper.db.delete(rootSchemaDir.pack(Tuple.from(path: _*)))
+        // don't delete here, only pick up this change after process restart
+        // dirPathToPrefixMap.remove(pathKey)
       }
     }
   }
@@ -82,14 +85,11 @@ object RocksDBInstance extends BaseInstance {
   }
 
   override def openSubspace(path: List[String]): Subspace = {
-    createOrOpenSubspace(path)
-    /*
-    this.synchronized{
+    dirPathToPrefixMap.synchronized {
       val pathKey = getPathMapKey(path)
-      val tableId = dirPathToPrefixMap(pathKey)
-      new Subspace(Tuple.from(Long.box(tableId)))
+      val tableId = dirPathToPrefixMap.get(pathKey)
+      new Subspace(Tuple.from(tableId))
     }
-    */
   }
 
   override def createTableIfNotExists(checkKey: Array[Byte], writeValueIfNotExists: List[(Array[Byte], Array[Byte])]): Boolean = {

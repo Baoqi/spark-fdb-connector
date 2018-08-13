@@ -26,7 +26,7 @@ object RocksDbWrapper {
     val db = RocksDB.open(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
 
     val iteratorReadOptions = new ReadOptions().setPrefixSameAsStart(true)
-    val batchWriteOptions = new WriteOptions().setDisableWAL(true)
+    val batchWriteOptions = new WriteOptions()
     new RocksDbWrapper(db, dbOptions, columnFamilyHandles.getFirst, iteratorReadOptions, batchWriteOptions)
   }
 }
