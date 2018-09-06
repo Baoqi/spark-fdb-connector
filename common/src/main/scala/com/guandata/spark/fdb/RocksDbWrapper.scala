@@ -19,11 +19,23 @@ case class RocksDbWrapper(val db: RocksDB,
 
 object RocksDbWrapper {
   def openRockDbWrapper(path: String): RocksDbWrapper = {
+    openRockDbWrapperInner(path, readOnly = false)
+  }
+
+  def openRockDbWrapperReadOnly(path: String): RocksDbWrapper = {
+    openRockDbWrapperInner(path, readOnly = true)
+  }
+
+  private def openRockDbWrapperInner(path: String, readOnly: Boolean): RocksDbWrapper = {
     val dbOptions = new DBOptions().setCreateIfMissing(true)
     val columnFamilyOptions = new ColumnFamilyOptions().useFixedLengthPrefixExtractor(3)
     val columnFamilyDescriptors = List( new ColumnFamilyDescriptor("default".getBytes("UTF-8"), columnFamilyOptions)).asJava
     val columnFamilyHandles =  new java.util.LinkedList[ColumnFamilyHandle]
-    val db = RocksDB.open(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
+    val db = if (readOnly) {
+      RocksDB.openReadOnly(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
+    } else {
+      RocksDB.open(dbOptions, path, columnFamilyDescriptors, columnFamilyHandles)
+    }
 
     val iteratorReadOptions = new ReadOptions().setPrefixSameAsStart(true)
     val batchWriteOptions = new WriteOptions()
