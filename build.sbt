@@ -7,7 +7,15 @@ lazy val buildSettings = Seq(
   scalaVersion         := Versions.scalaVersion,
   crossScalaVersions   := Versions.crossScala,
   crossVersion         := CrossVersion.binary,
-  scalacOptions ++= Seq("-feature", "-deprecation", "-Xexperimental")
+  scalacOptions ++= Seq("-feature", "-deprecation", "-Xexperimental"),
+  publishTo := {
+    val nexus = "https://app.mayidata.com/nexus/"
+    if (isSnapshot.value)
+      Some("snapshots" at nexus + "repository/maven-snapshots")
+    else
+      Some("releases"  at nexus + "repository/maven-releases")
+  },
+  credentials += Credentials(Path.userHome / ".sbt" / ".credentials")
 )
 
 
