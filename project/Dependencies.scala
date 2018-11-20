@@ -12,7 +12,7 @@ object Versions {
 }
 
 object Dependencies {
-  lazy val sparkDep = "org.apache.spark" %% "spark-sql" % "2.3.1"
+  lazy val sparkDep = "org.apache.spark" %% "spark-sql" % "2.4.0"
   lazy val fdbClientDep = "org.foundationdb" % "fdb-java" % "5.2.5"
   lazy val rocksDbDep = "org.rocksdb" % "rocksdbjni" % "5.14.2"
   lazy val scalaTest = "org.scalatest" %% "scalatest" % "3.0.5"

@@ -3,20 +3,24 @@ package org.apache.spark.sql.fdb
 import java.util.{Optional, UUID}
 
 import com.apple.foundationdb.Range
-import com.guandata.spark.fdb.{ColumnDataType, FdbBufferedDeleter, BaseBufferedReader, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage}
-import org.apache.spark.sql.{Row, RowFactory, SaveMode}
+import com.guandata.spark.fdb.{BaseBufferedReader, ColumnDataType, FdbBufferedDeleter, FdbBufferedWriter, FdbException, FdbInstance, FdbStorage}
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.sql.{RowFactory, SaveMode}
 import org.apache.spark.sql.sources.v2.{DataSourceOptions, DataSourceV2, ReadSupport, WriteSupport}
-import org.apache.spark.sql.sources.v2.reader.{DataReader, DataReaderFactory, DataSourceReader}
+import org.apache.spark.sql.sources.v2.reader.{DataSourceReader, InputPartition, InputPartitionReader}
 import org.apache.spark.sql.sources.v2.writer.{DataSourceWriter, DataWriter, DataWriterFactory, WriterCommitMessage}
 import org.apache.spark.sql.types.StructType
 
 import scala.collection.JavaConverters._
 
 
-class FdbDataReader(reader: BaseBufferedReader) extends DataReader[Row] {
+class FdbInputPartitionReader(schema: StructType, reader: BaseBufferedReader) extends InputPartitionReader[InternalRow] {
+  private val rowEncoder = RowEncoder.apply(schema).resolveAndBind()
+
   override def next(): Boolean = reader.next()
 
-  override def get(): Row = {
+  override def get(): InternalRow = {
     // Spark don't support UUID, we need to cast UUID to String
     val cellValues = reader.get().map{
       case cell: UUID if cell != null =>
@@ -24,7 +28,7 @@ class FdbDataReader(reader: BaseBufferedReader) extends DataReader[Row] {
       case cell =>
         cell
     }
-    RowFactory.create(cellValues: _*)
+    rowEncoder.toRow(RowFactory.create(cellValues: _*))
   }
 
   override def close(): Unit = {
@@ -33,15 +37,15 @@ class FdbDataReader(reader: BaseBufferedReader) extends DataReader[Row] {
 }
 
 
-class FdbDataReaderFactory(domainId: String, tableName: String, locations: Seq[String], begin: Array[Byte], end: Array[Byte]) extends DataReaderFactory[Row] {
+class FdbInputPartitionReaderFactory(schema: StructType, domainId: String, tableName: String, locations: Seq[String], begin: Array[Byte], end: Array[Byte]) extends InputPartition[InternalRow] {
   override def preferredLocations: Array[String] = {
     locations.toArray
   }
 
-  override def createDataReader(): DataReader[Row] = {
+  override def createPartitionReader(): InputPartitionReader[InternalRow] = {
     val storage = new FdbStorage(domainId)
     val tableDefinition = storage.getTableDefinition(tableName).get
-    new FdbDataReader(BaseBufferedReader.createBufferedReader(tableDefinition, storage, new Range(begin, end)))
+    new FdbInputPartitionReader(schema, BaseBufferedReader.createBufferedReader(tableDefinition, storage, new Range(begin, end)))
   }
 }
 
@@ -52,24 +56,26 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
     FdbUtil.convertTableDefinitionToStructType(tableDefinition)
   }
 
-  override def createDataReaderFactories(): java.util.List[DataReaderFactory[Row]] = {
+  override def planInputPartitions(): java.util.List[InputPartition[InternalRow]] = {
     if (storage.isRocksDB) {
       // we don't support read localityInfo for RocksDB currently
       val range = storage.openDataDir(tableName).range()
-      List(new FdbDataReaderFactory(domainId = domainId,
+      List(new FdbInputPartitionReaderFactory(schema = readSchema(),
+        domainId = domainId,
         tableName = tableName,
         locations = Seq.empty[String],
         begin = range.begin,
-        end = range.end).asInstanceOf[DataReaderFactory[Row]]
+        end = range.end).asInstanceOf[InputPartition[InternalRow]]
       ).asJava
     } else {
       val localityInfos = storage.getLocalityInfo(tableName)
       localityInfos.map { case (locations, range) =>
-        new FdbDataReaderFactory(domainId = domainId,
+        new FdbInputPartitionReaderFactory(schema = readSchema(),
+          domainId = domainId,
           tableName = tableName,
           locations = locations,
           begin = range.begin,
-          end = range.end).asInstanceOf[DataReaderFactory[Row]]
+          end = range.end).asInstanceOf[InputPartition[InternalRow]]
       }.asJava
     }
   }
@@ -77,7 +83,8 @@ class FdbDataSourceReader(domainId: String, tableName: String) extends DataSourc
 
 case class FdbWriterCommitMessage(message: String) extends WriterCommitMessage
 
-class FdbDataWriter(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriter[Row] {
+class FdbDataWriter(schema: StructType, domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriter[InternalRow] {
+  private val rowEncoder = RowEncoder.apply(schema).resolveAndBind()
   private val tableDefinition = new FdbStorage(domainId).getTableDefinition(tableName).get
   private val writer = {
     if (isDeleteRows) {
@@ -98,14 +105,15 @@ class FdbDataWriter(domainId: String, tableName: String, isDeleteRows: Boolean) 
 
   }
 
-  override def write(record: Row): Unit = {
+  override def write(row: InternalRow): Unit = {
     if (insertColumnNames.isEmpty) {
       insertColumnNames = if (isDeleteRows) {
         Option(tableDefinition.primaryKeys.toVector)
       } else {
-        Option(record.schema.map{_.name}.toVector)
+        Option(schema.map{_.name}.toVector)
       }
     }
+    val record = rowEncoder.fromRow(row)
     val cellValues = scala.Range(0, record.length).map{ i =>
       record.get(i).asInstanceOf[AnyRef]
     }
@@ -113,18 +121,18 @@ class FdbDataWriter(domainId: String, tableName: String, isDeleteRows: Boolean) 
   }
 }
 
-class FdbDataWriterFactory(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriterFactory[Row] {
-  override def createDataWriter(partitionId: Int, attemptNumber: Int): DataWriter[Row] = {
-    new FdbDataWriter(domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
+class FdbDataWriterFactory(schema: StructType, domainId: String, tableName: String, isDeleteRows: Boolean) extends DataWriterFactory[InternalRow] {
+  override def createDataWriter(partitionId: Int, taskId: Long, epochId: Long): DataWriter[InternalRow] = {
+    new FdbDataWriter(schema = schema, domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
   }
 }
 
-class FdbDataSourceWriter(domainId: String, tableName: String, isDeleteRows: Boolean) extends DataSourceWriter {
+class FdbDataSourceWriter(schema: StructType, domainId: String, tableName: String, isDeleteRows: Boolean) extends DataSourceWriter {
   override def commit(messages: Array[WriterCommitMessage]): Unit = {
   }
 
-  override def createWriterFactory(): DataWriterFactory[Row] = {
-    new FdbDataWriterFactory(domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
+  override def createWriterFactory(): DataWriterFactory[InternalRow] = {
+    new FdbDataWriterFactory(schema = schema, domainId = domainId, tableName = tableName, isDeleteRows = isDeleteRows)
   }
 
   override def abort(messages: Array[WriterCommitMessage]): Unit = {
@@ -151,7 +159,7 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
       } else if (tableDefinitionOpt.get.primaryKeys.size != schema.fields.length) {
         throw new FdbException("Not all primary keys are provided, to DELETE rows, the source DataSet should and only contains all primary key values!")
       } else {
-        Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName, isDeleteRows = true))
+        Optional.of(new FdbDataSourceWriter(schema = schema, domainId = domainId, tableName = tableName, isDeleteRows = true))
       }
     } else {
       var skip = false
@@ -200,7 +208,7 @@ class DefaultSource extends DataSourceV2 with ReadSupport with WriteSupport {
           storage.truncateTable(tableName)
         }
 
-        Optional.of(new FdbDataSourceWriter(domainId = domainId, tableName = tableName, isDeleteRows = false))
+        Optional.of(new FdbDataSourceWriter(schema = schema, domainId = domainId, tableName = tableName, isDeleteRows = false))
       }
     }
   }
